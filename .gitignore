@@ -12,3 +12,5 @@ wheels/
 ingested/
 queue/
 state/
+
+.vscode/
