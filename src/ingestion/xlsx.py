@@ -15,7 +15,13 @@ METADATA_SHEETS = {"Contents", "Background Information", "Notes"}
 def slugify(text: str) -> str:
     text = text.strip().lower()
     text = re.sub(r"[^a-z0-9]+", "_", text)
-    return text.strip("_") or "col"
+    text = text.strip("_") or "col"
+    if text[0].isdigit():
+        # Leading digits (e.g. a "2024" year column) aren't valid in an unquoted SQL
+        # identifier: DuckDB lexes "2024_in_service" as the number 2024 followed by a
+        # stray token, breaking any expression built around it.
+        text = f"_{text}"
+    return text
 
 
 def get_layers(con: duckdb.DuckDBPyConnection, path: str) -> list[str]:
