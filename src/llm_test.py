@@ -6,10 +6,10 @@ surfaced an ingested xlsx document: given its `metadata`, build a schema-aware
 system prompt and a `query_dataset` tool bound to that document's `.duckdb` file,
 then let the model answer a question via litellm tool-calling.
 
-Usage:
-    uv run --with-editable . python llm_test.py "How many vessels were in service in 2023?"
-    uv run --with-editable . python llm_test.py "..." --doc UK_armed_forces_equipment_and_formations_2025
-    uv run --with-editable . python llm_test.py "..." --model anthropic/claude-sonnet-5
+Usage (from the repo root, so relative `ingested/` paths resolve):
+    uv run ask "How many vessels were in service in 2023?"
+    uv run ask "..." --doc UK_armed_forces_equipment_and_formations_2025
+    uv run ask "..." --model anthropic/claude-sonnet-5
 """
 
 import argparse
@@ -21,7 +21,6 @@ from pathlib import Path
 import duckdb
 import litellm
 
-ROOT = Path(__file__).resolve().parent
 DEFAULT_DOC = "UK_armed_forces_equipment_and_formations_2025"
 DEFAULT_MODEL = os.environ.get("LLM_TEST_MODEL", "anthropic/claude-sonnet-5")
 MAX_ROWS = 200
@@ -138,7 +137,7 @@ def main():
     parser.add_argument("--model", default=DEFAULT_MODEL, help="litellm model string")
     args = parser.parse_args()
 
-    doc_dir = ROOT / "ingested" / args.doc
+    doc_dir = Path("ingested") / args.doc
     answer = run(args.question, doc_dir, args.model)
     print(answer)
 
