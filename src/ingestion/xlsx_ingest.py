@@ -29,6 +29,8 @@ def xlsx_ingest_flow(doc: Path, detected: DetectedType, output_root: Path) -> No
     metadata = {
         "title": doc.stem,
         "mime_type": detected.mime_type,
+        "kind": "queryable_dataset",
+        "query_engine": "duckdb",
         "duckdb_file": db_path.name,
         "background": result["background"],
         "tables": result["tables"],

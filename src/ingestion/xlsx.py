@@ -127,6 +127,10 @@ def ingest_sheet(
 
     safe_title = title.replace("'", "''")
     con.execute(f'COMMENT ON TABLE "{table_name}" IS \'{safe_title}\'')
+    for c, h in zip(columns, header_row[:n_cols]):
+        if h:
+            safe_h = h.replace("'", "''")
+            con.execute(f'COMMENT ON COLUMN "{table_name}"."{c}" IS \'{safe_h}\'')
     return True
 
 
@@ -169,8 +173,15 @@ def load_workbook(path: Path, db_path: str | Path = ":memory:") -> tuple[duckdb.
     }
 
 
-def compute_column_stats(con: duckdb.DuckDBPyConnection, table_name: str, column: str, dtype: str) -> dict:
+def compute_column_stats(
+    con: duckdb.DuckDBPyConnection, table_name: str, column: str, dtype: str, original_name: str | None
+) -> dict:
     """Run a fixed set of standard summary queries for one column.
+
+    `original_name` is the header text as it appeared in the spreadsheet, before
+    slugifying to a SQL-safe column name (e.g. "Revenue (£m)" -> "revenue_m") — kept
+    so a unit or phrasing hint isn't lost when an LLM is deciding how to query the
+    column.
 
     Future: an LLM could look at each sheet's title/background and infer
     additional, sheet-specific queries beyond this fixed set (e.g. group-by
@@ -183,6 +194,7 @@ def compute_column_stats(con: duckdb.DuckDBPyConnection, table_name: str, column
         ).fetchone()
         return {
             "name": column,
+            "original_name": original_name,
             "type": dtype,
             "null_count": null_count,
             "min": min_v,
@@ -199,6 +211,7 @@ def compute_column_stats(con: duckdb.DuckDBPyConnection, table_name: str, column
     ).fetchall()
     return {
         "name": column,
+        "original_name": original_name,
         "type": dtype,
         "null_count": null_count,
         "distinct_count": distinct_count,
@@ -209,11 +222,19 @@ def compute_column_stats(con: duckdb.DuckDBPyConnection, table_name: str, column
 def compute_table_metadata(con: duckdb.DuckDBPyConnection, table_name: str, title: str) -> dict:
     row_count = con.execute(f'SELECT count(*) FROM "{table_name}"').fetchone()[0]
     columns = con.execute(f'DESCRIBE "{table_name}"').fetchall()  # (name, type, null, key, default, extra)
+    comments = dict(
+        con.execute(
+            "SELECT column_name, comment FROM duckdb_columns() WHERE table_name = ?", [table_name]
+        ).fetchall()
+    )
     return {
         "table_name": table_name,
         "title": title,
         "row_count": row_count,
-        "columns": [compute_column_stats(con, table_name, name, dtype) for name, dtype, *_ in columns],
+        "columns": [
+            compute_column_stats(con, table_name, name, dtype, comments.get(name))
+            for name, dtype, *_ in columns
+        ],
     }
 
 
