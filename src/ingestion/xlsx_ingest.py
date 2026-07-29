@@ -24,7 +24,7 @@ def run_xlsx_ingest(doc: Path, detected: DetectedType, output_root: Path) -> tup
 
         try:
             result = xlsx.extract_metadata(doc, db_path)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - must record failure detail rather than crash the task
             write_status(
                 doc_dir, {"status": "failed", "reason": "xlsx_ingestion_error", "detail": str(e)}
             )

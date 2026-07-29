@@ -194,10 +194,12 @@ def compute_column_stats(
     breakdowns for a particular category column). Not needed yet.
     """
     if dtype in ("BIGINT", "DOUBLE"):
-        null_count, min_v, max_v, avg_v = con.execute(
+        row = con.execute(
             f'SELECT count(*) - count("{column}"), min("{column}"), max("{column}"), avg("{column}") '
             f'FROM "{table_name}"'
         ).fetchone()
+        assert row is not None  # aggregate query always returns exactly one row
+        null_count, min_v, max_v, avg_v = row
         return {
             "name": column,
             "original_name": original_name,
@@ -208,9 +210,11 @@ def compute_column_stats(
             "avg": avg_v,
         }
 
-    null_count, distinct_count = con.execute(
+    row = con.execute(
         f'SELECT count(*) - count("{column}"), count(DISTINCT "{column}") FROM "{table_name}"'
     ).fetchone()
+    assert row is not None  # aggregate query always returns exactly one row
+    null_count, distinct_count = row
     top_values = con.execute(
         f'SELECT "{column}", count(*) AS c FROM "{table_name}" '
         f'WHERE "{column}" IS NOT NULL GROUP BY 1 ORDER BY c DESC LIMIT 5'
@@ -226,7 +230,9 @@ def compute_column_stats(
 
 
 def compute_table_metadata(con: duckdb.DuckDBPyConnection, table_name: str, title: str) -> dict:
-    row_count = con.execute(f'SELECT count(*) FROM "{table_name}"').fetchone()[0]
+    row_count_row = con.execute(f'SELECT count(*) FROM "{table_name}"').fetchone()
+    assert row_count_row is not None  # aggregate query always returns exactly one row
+    row_count = row_count_row[0]
     columns = con.execute(f'DESCRIBE "{table_name}"').fetchall()  # (name, type, null, key, default, extra)
     comments = dict(
         con.execute(

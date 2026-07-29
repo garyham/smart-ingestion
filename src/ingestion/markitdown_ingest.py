@@ -20,7 +20,7 @@ def convert_with_markitdown(doc: Path, detected: DetectedType, output_root: Path
     try:
         result = _markitdown.convert(doc)
         markdown = result.text_content
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - must record failure detail rather than crash the task
         write_status(
             doc_dir,
             {"status": "failed", "reason": "markitdown_conversion_failed", "detail": str(e)},

@@ -38,5 +38,6 @@ include = [
 
 [dependency-groups]
 dev = [
+    "celery-types>=0.26.0",
     "litellm>=1.94.0",
 ]

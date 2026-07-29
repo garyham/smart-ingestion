@@ -19,7 +19,8 @@ def convert_pdf(doc: Path, detected: DetectedType, output_root: Path) -> str | N
     try:
         num_pages = pymupdf.open(doc).page_count
         markdown = pymupdf4llm.to_markdown(doc)
-    except Exception as e:
+        assert isinstance(markdown, str)  # to_markdown(doc) without page_chunks always returns str
+    except Exception as e:  # noqa: BLE001 - must record failure detail rather than crash the task
         write_status(
             doc_dir, {"status": "failed", "reason": "pdf_conversion_failed", "detail": str(e)}
         )
