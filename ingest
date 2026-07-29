@@ -2,20 +2,49 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-action="${1:-live}"
+export PREFECT_API_URL="${PREFECT_API_URL:-http://127.0.0.1:4200/api}"
+
+server_running() {
+  curl -sf "$PREFECT_API_URL/health" >/dev/null 2>&1
+}
+
+start_server_if_needed() {
+  if server_running; then
+    echo "Prefect server already running at $PREFECT_API_URL"
+    return
+  fi
+  echo "Starting Prefect server in the background..."
+  uv run prefect server start --background
+  for _ in $(seq 1 30); do
+    if server_running; then
+      echo "Prefect server is up."
+      return
+    fi
+    sleep 1
+  done
+  echo "Prefect server did not become healthy in time." >&2
+  exit 1
+}
+
+action="${1:-poll}"
 
 case "$action" in
-  live)
-    uv run live
+  poll)
+    start_server_if_needed
+    uv run poll
     ;;
   server)
     uv run prefect server start
     ;;
   stop)
-    uv run prefect server stop
+    if server_running; then
+      uv run prefect server stop
+    else
+      echo "Prefect server is not running."
+    fi
     ;;
   *)
-    echo "Usage: $0 [live|server|stop]" >&2
+    echo "Usage: $0 [poll|server|stop]" >&2
     exit 1
     ;;
 esac

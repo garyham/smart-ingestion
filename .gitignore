@@ -10,3 +10,5 @@ wheels/
 .venv
 
 ingested/
+queue/
+state/

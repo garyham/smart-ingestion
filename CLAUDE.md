@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`smart-files` is a proof-of-concept **document ingestion pipeline**. Given source documents in
-`data/`, it ingests them and writes structured output to `ingested/`, using:
+`smart-files` is a proof-of-concept **document ingestion pipeline**. Source documents are dropped
+into a `queue/` folder; a Prefect deployment polls on a cron schedule, ingests new arrivals, and
+writes structured output to `ingested/`, using:
 
 - **Prefect** for workflow orchestration (tasks/flows).
 - **pymupdf4llm** to convert PDFs to markdown, and **markitdown** to convert other document types
@@ -45,7 +46,8 @@ ingested/<doc_name>/
 ```
 
 Test/sample input documents live in `data/` (e.g.
-`data/UK_armed_forces_equipment_and_formations_2025.xlsx`).
+`data/UK_armed_forces_equipment_and_formations_2025.xlsx`) — copy one into `queue/` to have it
+picked up and ingested.
 
 ### Failure is a valid outcome
 
@@ -58,17 +60,24 @@ ingestion doesn't fully succeed, so the failure is inspectable rather than silen
 
 ## Current state of the code
 
-The pipeline described above is implemented, laid out as a `src/` package. `src/pipeline.py` (the
-`live` entry point) is the Prefect flow/orchestrator: it lists source documents, detects each one's
-MIME type, and routes it to the right ingestion subflow. Each per-type ingestion path
-(pdf/markitdown/xlsx) is its own Prefect subflow, called directly (sequentially, one document at a
-time) from `ingest_flow`, so each document gets independent state/retries/logs regardless of how
-other documents in the same run fare. Concurrency pooling across documents was removed for now and
-may be reintroduced later. The per-concern logic lives under `src/ingestion/`:
+The pipeline described above is implemented, laid out as a `src/` package. `src/poll_ingest.py` is
+the entry point: `poll_and_ingest_flow` (registered as a Prefect deployment via
+`poll_and_ingest_flow.serve(cron=...)`) scans the `queue/` landing folder for new files, records
+them in a SQLite queue table (`state/queue.db`, managed by `src/queue_db.py` — tracks
+`pending`/`processing`/`success`/`failed` per document URI, deduped so already-seen files aren't
+reprocessed), and routes each pending document to the right per-type ingestion subflow via
+`src/ingestion/routing.py`'s `route_document`. Each per-type ingestion path (pdf/markitdown/xlsx) is
+its own Prefect subflow, called directly (sequentially, one document at a time), so each document
+gets independent state/retries/logs regardless of how other documents fare. Concurrency pooling
+across documents was removed for now and may be reintroduced later. Scheduling requires a real
+Prefect server (`./ingest server`) — `poll_ingest.py` fails fast rather than silently degrading to
+an ephemeral server that can't run the cron schedule. The per-concern logic lives under
+`src/ingestion/`:
 
 - `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist).
-- `src/ingestion/detect.py` — MIME detection (`DetectedType`, `identify_mime_type`); routing between
-  PDF/xlsx/other MIME types lives in `src/pipeline.py`.
+- `src/ingestion/detect.py` — MIME detection (`DetectedType`, `identify_mime_type`).
+- `src/ingestion/routing.py` — `route_document`, dispatching a detected document to the right
+  ingestion subflow (pdf/markitdown/xlsx) or marking it unsupported; shared by `poll_ingest.py`.
 - `src/ingestion/assets.py` — shared output-writing helpers (`copy_to_assets`, `write_status`,
   `write_metadata`) used by every ingestion path.
 - `src/ingestion/pdf_ingest.py` — converts PDFs to markdown via pymupdf4llm (`convert_pdf`), writing
@@ -99,14 +108,22 @@ This project uses `uv` for dependency management (Python >=3.12, deps pinned in 
 # install dependencies
 uv sync
 
-# run the ingestion flow against data/, writing output to ingested/
-uv run live
-# equivalently:
-uv run src/pipeline.py
+# start the Prefect server (required for the poller's cron schedule to run)
+./ingest server
 
-# or via the `ingest` wrapper script (live | server | stop)
-./ingest live
+# in another terminal: start the poller, which watches queue/ and ingests
+# new arrivals into ingested/ on a cron schedule
+./ingest poll
+
+# equivalently:
+uv run poll
+
+# stop the Prefect server
+./ingest stop
 ```
+
+Drop a file into `queue/` and it'll be picked up (and recorded in `state/queue.db`) on the next
+poll. `queue/` and `state/` are gitignored, local-only working directories.
 
 There is no lint/test/build tooling configured yet.
 
