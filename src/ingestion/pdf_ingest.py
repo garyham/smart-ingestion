@@ -2,9 +2,10 @@ from pathlib import Path
 
 import pymupdf
 import pymupdf4llm
-from prefect import task
+from prefect import flow, task
 
 from ingestion.assets import copy_to_assets, write_metadata, write_status
+from ingestion.chunking import chunk_and_finalize
 from ingestion.detect import DetectedType
 
 
@@ -36,3 +37,10 @@ def convert_pdf(doc: Path, detected: DetectedType, output_root: Path) -> str | N
         },
     )
     return markdown
+
+
+@flow(name="ingest-pdf")
+def pdf_ingest_flow(doc: Path, detected: DetectedType, output_root: Path) -> None:
+    """Subflow for the PDF ingestion path: convert via pymupdf4llm, then chunk."""
+    markdown = convert_pdf(doc, detected, output_root)
+    chunk_and_finalize(doc, output_root, markdown)

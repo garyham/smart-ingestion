@@ -60,8 +60,11 @@ ingestion doesn't fully succeed, so the failure is inspectable rather than silen
 
 The pipeline described above is implemented, laid out as a `src/` package. `src/pipeline.py` (the
 `live` entry point) is the Prefect flow/orchestrator: it lists source documents, detects each one's
-MIME type, and routes it to the right ingestion task. The per-concern logic lives under
-`src/ingestion/`:
+MIME type, and routes it to the right ingestion subflow. Each per-type ingestion path
+(pdf/markitdown/xlsx) is its own Prefect subflow, submitted concurrently (via a thin `@task` wrapper,
+since flows can't be submitted to a local `ThreadPoolTaskRunner` directly) from `ingest_flow`'s task
+runner, so each document gets independent state/retries/logs regardless of how other documents in
+the same run fare. The per-concern logic lives under `src/ingestion/`:
 
 - `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist, doc pool size).
 - `src/ingestion/detect.py` — MIME detection (`DetectedType`, `identify_mime_type`); routing between
@@ -69,9 +72,10 @@ MIME type, and routes it to the right ingestion task. The per-concern logic live
 - `src/ingestion/assets.py` — shared output-writing helpers (`copy_to_assets`, `write_status`,
   `write_metadata`) used by every ingestion path.
 - `src/ingestion/pdf_ingest.py` — converts PDFs to markdown via pymupdf4llm (`convert_pdf`), writing
-  assets/metadata.
+  assets/metadata, then chunks; `pdf_ingest_flow` is the subflow wrapping the two steps.
 - `src/ingestion/markitdown_ingest.py` — converts other non-xlsx document types to markdown via
-  markitdown (`convert_with_markitdown`), writing assets/metadata.
+  markitdown (`convert_with_markitdown`), writing assets/metadata, then chunks;
+  `markitdown_ingest_flow` is the subflow wrapping the two steps.
 - `src/ingestion/chunking.py` — shared chunking step (`chunk_and_finalize`): splits converted markdown
   via `langchain_text_splitters` (header-aware split, then size-capped) and writes `chunks.jsonl` +
   the final `status.json` for non-xlsx types.
@@ -80,8 +84,8 @@ MIME type, and routes it to the right ingestion task. The per-concern logic live
   numbers to titles via the `Contents` sheet's `Worksheet <n> – <title>` format, detects header rows,
   slugifies column names, infers `BIGINT`/`DOUBLE`/`VARCHAR` column types, and computes per-column
   summary stats.
-- `src/ingestion/xlsx_ingest.py` — the Prefect task wrapping `src/ingestion/xlsx.py` that persists
-  the DuckDB file and writes `metadata`/`status.json`.
+- `src/ingestion/xlsx_ingest.py` — `xlsx_ingest_flow`, the Prefect subflow wrapping
+  `src/ingestion/xlsx.py` that persists the DuckDB file and writes `metadata`/`status.json`.
 
 There is no downstream Q&A/chat loop in this codebase — that concern is out of scope per the
 invariants below, and ingestion stops once metadata, (optional) chunks, and (for xlsx) the queryable

@@ -1,15 +1,15 @@
 from pathlib import Path
 
-from prefect import task
+from prefect import flow
 
 from ingestion import xlsx
 from ingestion.assets import copy_to_assets, write_metadata, write_status
 from ingestion.detect import DetectedType
 
 
-@task
-def ingest_xlsx(doc: Path, detected: DetectedType, output_root: Path) -> None:
-    """Ingest an xlsx workbook into a persisted, queryable DuckDB database, and
+@flow(name="ingest-xlsx")
+def xlsx_ingest_flow(doc: Path, detected: DetectedType, output_root: Path) -> None:
+    """Subflow for the xlsx ingestion path: ingest into a queryable DuckDB database and
     extract its metadata via DuckDB standard queries. Not chunked, per CLAUDE.md.
     """
     doc_dir = output_root / doc.stem
