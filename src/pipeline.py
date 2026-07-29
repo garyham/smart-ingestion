@@ -1,8 +1,6 @@
 from pathlib import Path
 
 from prefect import flow, task
-from prefect.futures import wait
-from prefect.task_runners import ThreadPoolTaskRunner
 
 from ingestion.assets import copy_to_assets, write_status
 from ingestion.config import load_config
@@ -13,7 +11,6 @@ from ingestion.xlsx_ingest import xlsx_ingest_flow
 
 _config = load_config()
 _allowed_mime_types = set(_config["mime_types"])
-_doc_pool_size = int(_config.get("doc_pool", 1))
 
 _PDF_MIME_TYPES = {"application/pdf"}
 _XLSX_MIME_TYPES = {
@@ -50,25 +47,9 @@ def mark_unsupported(doc: Path, detected: DetectedType, output_root: Path) -> No
     )
 
 
-@task
-def run_xlsx_ingest(doc: Path, detected: DetectedType, output_root: Path) -> None:
-    xlsx_ingest_flow(doc, detected, output_root)
-
-
-@task
-def run_pdf_ingest(doc: Path, detected: DetectedType, output_root: Path) -> None:
-    pdf_ingest_flow(doc, detected, output_root)
-
-
-@task
-def run_markitdown_ingest(doc: Path, detected: DetectedType, output_root: Path) -> None:
-    markitdown_ingest_flow(doc, detected, output_root)
-
-
-@flow(name="ingest-documents", task_runner=ThreadPoolTaskRunner(max_workers=_doc_pool_size))
+@flow(name="ingest-documents")
 def ingest_flow(directory: Path = Path("data"), output_root: Path = Path("ingested")) -> list[Path]:
     documents = list_documents(directory)
-    futures = []
     for doc in documents:
         detected = identify_mime_type(doc)
         source = "content" if detected.from_content else "extension fallback"
@@ -78,15 +59,14 @@ def ingest_flow(directory: Path = Path("data"), output_root: Path = Path("ingest
             print(f"  route: unsupported -> failed")
             mark_unsupported(doc, detected, output_root)
         elif detected.mime_type in _XLSX_MIME_TYPES:
-            print(f"  route: xlsx -> DuckDB metadata extraction (pool size {_doc_pool_size})")
-            futures.append(run_xlsx_ingest.submit(doc, detected, output_root))
+            print(f"  route: xlsx -> DuckDB metadata extraction")
+            xlsx_ingest_flow(doc, detected, output_root)
         elif detected.mime_type in _PDF_MIME_TYPES:
-            print(f"  route: pdf -> pymupdf4llm + chunking (pool size {_doc_pool_size})")
-            futures.append(run_pdf_ingest.submit(doc, detected, output_root))
+            print(f"  route: pdf -> pymupdf4llm + chunking")
+            pdf_ingest_flow(doc, detected, output_root)
         else:
-            print(f"  route: markitdown + chunking (pool size {_doc_pool_size})")
-            futures.append(run_markitdown_ingest.submit(doc, detected, output_root))
-    wait(futures)
+            print(f"  route: markitdown + chunking")
+            markitdown_ingest_flow(doc, detected, output_root)
     return documents
 
 

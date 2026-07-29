@@ -61,12 +61,12 @@ ingestion doesn't fully succeed, so the failure is inspectable rather than silen
 The pipeline described above is implemented, laid out as a `src/` package. `src/pipeline.py` (the
 `live` entry point) is the Prefect flow/orchestrator: it lists source documents, detects each one's
 MIME type, and routes it to the right ingestion subflow. Each per-type ingestion path
-(pdf/markitdown/xlsx) is its own Prefect subflow, submitted concurrently (via a thin `@task` wrapper,
-since flows can't be submitted to a local `ThreadPoolTaskRunner` directly) from `ingest_flow`'s task
-runner, so each document gets independent state/retries/logs regardless of how other documents in
-the same run fare. The per-concern logic lives under `src/ingestion/`:
+(pdf/markitdown/xlsx) is its own Prefect subflow, called directly (sequentially, one document at a
+time) from `ingest_flow`, so each document gets independent state/retries/logs regardless of how
+other documents in the same run fare. Concurrency pooling across documents was removed for now and
+may be reintroduced later. The per-concern logic lives under `src/ingestion/`:
 
-- `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist, doc pool size).
+- `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist).
 - `src/ingestion/detect.py` — MIME detection (`DetectedType`, `identify_mime_type`); routing between
   PDF/xlsx/other MIME types lives in `src/pipeline.py`.
 - `src/ingestion/assets.py` — shared output-writing helpers (`copy_to_assets`, `write_status`,

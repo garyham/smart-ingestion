@@ -30,7 +30,3 @@ mime_types:
 
   # Email (markitdown)
   - message/rfc822
-
-# Number of documents to run through conversion/chunking concurrently.
-# Defaults to 1 (sequential) if not supplied.
-doc_pool: 2
