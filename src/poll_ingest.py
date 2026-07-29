@@ -15,10 +15,11 @@ from prefect import flow, task
 import queue_db
 from ingestion.config import load_config
 from ingestion.detect import identify_mime_type
-from ingestion.routing import route_document
+from ingestion.routing import ensure_concurrency_limits, route_document
 
 _config = load_config()
 _allowed_mime_types = set(_config["mime_types"])
+_concurrency_limits = _config.get("concurrency_limits", {})
 
 
 def _to_file_uri(path: Path) -> str:
@@ -79,13 +80,21 @@ def poll_and_ingest_flow(
     db_path: Path = Path("state/queue.db"),
 ) -> None:
     queue_db.init_db(db_path)
+    ensure_concurrency_limits(_concurrency_limits)
 
     uris = scan_queue_dir(queue_dir)
-    queue_db.enqueue_new(db_path, uris)
+    queue_db.enqueue(db_path, uris)
 
-    for item_id, uri in queue_db.list_pending(db_path):
+    # Submit every pending item before waiting on any of them, so they run concurrently
+    # on the flow's task runner instead of one at a time.
+    pending = queue_db.list_pending(db_path)
+    submitted = []
+    for item_id, uri in pending:
         queue_db.mark_processing(db_path, item_id)
-        succeeded, error = process_item(uri, output_root)
+        submitted.append((item_id, uri, process_item.submit(uri, output_root)))
+
+    for item_id, uri, future in submitted:
+        succeeded, error = future.result()
         if succeeded:
             queue_db.mark_success(db_path, item_id)
         else:

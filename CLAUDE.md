@@ -62,16 +62,23 @@ ingestion doesn't fully succeed, so the failure is inspectable rather than silen
 
 The pipeline described above is implemented, laid out as a `src/` package. `src/poll_ingest.py` is
 the entry point: `poll_and_ingest_flow` (registered as a Prefect deployment via
-`poll_and_ingest_flow.serve(cron=...)`) scans the `queue/` landing folder for new files, records
-them in a SQLite queue table (`state/queue.db`, managed by `src/queue_db.py` — tracks
-`pending`/`processing`/`success`/`failed` per document URI, deduped so already-seen files aren't
-reprocessed), and routes each pending document to the right per-type ingestion subflow via
-`src/ingestion/routing.py`'s `route_document`. Each per-type ingestion path (pdf/markitdown/xlsx) is
-its own Prefect subflow, called directly (sequentially, one document at a time), so each document
-gets independent state/retries/logs regardless of how other documents fare. Concurrency pooling
-across documents was removed for now and may be reintroduced later. Scheduling requires a real
-Prefect server (`./prefect_server start`) — `poll_ingest.py` fails fast rather than silently degrading to
-an ephemeral server that can't run the cron schedule. The per-concern logic lives under
+`poll_and_ingest_flow.serve(cron=...)`) scans the `queue/` landing folder for files, records them in
+a SQLite queue table (`state/queue.db`, managed by `src/queue_db.py` — tracks
+`pending`/`processing`/`success`/`failed` per document URI; a URI already `pending`/`processing` is
+left alone so an in-flight document isn't queued twice, but any other prior status is reset to
+`pending` on rescan, so dropping a previously-processed file back into `queue/` re-ingests it
+regardless of past outcome), and routes each pending document to the right per-type ingestion
+subflow via `src/ingestion/routing.py`'s `route_document`. Pending documents are processed
+concurrently — each is submitted as a Prefect task (`process_item.submit(...)`) rather than called
+directly, so multiple documents ingest in parallel on the flow's task runner. Concurrency is
+additionally capped per document type via Prefect global concurrency limits (limits configured in
+`config/config.yaml`'s `concurrency_limits`, idempotently provisioned each poll cycle by
+`ensure_concurrency_limits`), so e.g. at most N PDF conversions run at once regardless of how many
+documents are queued overall. Each per-type ingestion path (pdf/markitdown/xlsx) is its own Prefect
+subflow, so each document still gets independent state/retries/logs regardless of how other
+documents fare. Scheduling requires a real Prefect server (`./prefect_server start`) —
+`poll_ingest.py` fails fast rather than silently degrading to an ephemeral server that can't run the
+cron schedule. The per-concern logic lives under
 `src/ingestion/`:
 
 - `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist).

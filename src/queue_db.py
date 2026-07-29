@@ -30,12 +30,27 @@ def init_db(db_path: Path) -> None:
         )
 
 
-def enqueue_new(db_path: Path, uris: list[str]) -> None:
-    """Insert any URIs not already present in the queue, as pending."""
+def enqueue(db_path: Path, uris: list[str]) -> None:
+    """Record each URI as pending, regardless of whether it's been seen before.
+
+    A URI that's currently `pending`/`processing` is left alone, so a document already
+    in flight isn't queued a second time. Any other prior status (`success`/`failed`) is
+    reset to `pending`, so dropping the same file back into queue/ re-ingests it.
+    """
     now = _now()
     with _connect(db_path) as conn:
         conn.executemany(
-            "INSERT OR IGNORE INTO queue_items (uri, status, enqueued_at) VALUES (?, 'pending', ?)",
+            """
+            INSERT INTO queue_items (uri, status, enqueued_at)
+            VALUES (?, 'pending', ?)
+            ON CONFLICT(uri) DO UPDATE SET
+                status = 'pending',
+                enqueued_at = excluded.enqueued_at,
+                started_at = NULL,
+                finished_at = NULL,
+                error = NULL
+            WHERE status NOT IN ('pending', 'processing')
+            """,
             [(uri, now) for uri in uris],
         )
 

@@ -30,3 +30,11 @@ mime_types:
 
   # Email (markitdown)
   - message/rfc822
+
+# Per-document-type concurrency caps. Enforced via Prefect global concurrency limits (see
+# ingestion/routing.py), so at most this many ingestions of each type run at once, regardless
+# of how many documents are being processed concurrently overall.
+concurrency_limits:
+  pdf: 2
+  markitdown: 4
+  xlsx: 2
