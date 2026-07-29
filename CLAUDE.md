@@ -70,7 +70,7 @@ reprocessed), and routes each pending document to the right per-type ingestion s
 its own Prefect subflow, called directly (sequentially, one document at a time), so each document
 gets independent state/retries/logs regardless of how other documents fare. Concurrency pooling
 across documents was removed for now and may be reintroduced later. Scheduling requires a real
-Prefect server (`./ingest server`) — `poll_ingest.py` fails fast rather than silently degrading to
+Prefect server (`./prefect_server start`) — `poll_ingest.py` fails fast rather than silently degrading to
 an ephemeral server that can't run the cron schedule. The per-concern logic lives under
 `src/ingestion/`:
 
@@ -109,17 +109,16 @@ This project uses `uv` for dependency management (Python >=3.12, deps pinned in 
 uv sync
 
 # start the Prefect server (required for the poller's cron schedule to run)
-./ingest server
+./prefect_server start
 
 # in another terminal: start the poller, which watches queue/ and ingests
 # new arrivals into ingested/ on a cron schedule
-./ingest poll
-
-# equivalently:
 uv run poll
 
+# stop the poller with Ctrl-C in its terminal
+
 # stop the Prefect server
-./ingest stop
+./prefect_server stop
 ```
 
 Drop a file into `queue/` and it'll be picked up (and recorded in `state/queue.db`) on the next

@@ -5,6 +5,11 @@ from urllib.error import URLError
 from urllib.parse import unquote, urlparse
 from urllib.request import urlopen
 
+# Must be set before `prefect` is imported: Prefect reads PREFECT_API_URL into its
+# settings context at import time, so setting it any later has no effect on .serve().
+_DEFAULT_PREFECT_API_URL = "http://127.0.0.1:4200/api"
+os.environ.setdefault("PREFECT_API_URL", _DEFAULT_PREFECT_API_URL)
+
 from prefect import flow, task
 
 import queue_db
@@ -90,14 +95,7 @@ def poll_and_ingest_flow(
 
 def _require_prefect_server() -> None:
     """`.serve()`'s cron schedule silently no-ops on an ephemeral server, so fail loudly instead."""
-    api_url = os.environ.get("PREFECT_API_URL")
-    if not api_url:
-        raise SystemExit(
-            "PREFECT_API_URL is not set. poll_and_ingest_flow.serve() needs a real Prefect "
-            "server to run its cron schedule - an ephemeral server can't schedule runs. "
-            "Start one with `./ingest server`, or run this via `./ingest poll` (which sets "
-            "PREFECT_API_URL for you)."
-        )
+    api_url = os.environ["PREFECT_API_URL"]
     try:
         with urlopen(f"{api_url}/health", timeout=5) as resp:
             if resp.status != 200:
@@ -105,7 +103,7 @@ def _require_prefect_server() -> None:
     except URLError as exc:
         raise SystemExit(
             f"Cannot reach Prefect server at {api_url} ({exc}). Start one with "
-            "`./ingest server` before running the poller."
+            "`./prefect_server start` before running the poller."
         ) from exc
 
 
