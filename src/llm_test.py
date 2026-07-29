@@ -9,7 +9,7 @@ then let the model answer a question via litellm tool-calling.
 Usage (from the repo root, so relative `ingested/` paths resolve):
     uv run ask "How many vessels were in service in 2023?"
     uv run ask "..." --doc UK_armed_forces_equipment_and_formations_2025
-    uv run ask "..." --model anthropic/claude-sonnet-5
+    uv run ask "..." --model anthropic/claude-sonnet-5  # default is gpt-4.1
 """
 
 import argparse
@@ -22,7 +22,7 @@ import duckdb
 import litellm
 
 DEFAULT_DOC = "UK_armed_forces_equipment_and_formations_2025"
-DEFAULT_MODEL = os.environ.get("LLM_TEST_MODEL", "anthropic/claude-sonnet-5")
+DEFAULT_MODEL = os.environ.get("LLM_TEST_MODEL", "gpt-4.1")
 MAX_ROWS = 200
 MAX_TOOL_ROUNDS = 6
 
