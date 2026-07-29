@@ -94,8 +94,10 @@ conversion step. Each of these functions has its own top-level `try/except Excep
 an unexpected failure can never strand a queue row in `processing` forever. Scheduling requires
 Redis plus the Celery workers/beat to be running (`./smart_files_ctl start`), which fails fast if
 the observability API doesn't come up healthy. A small read-only FastAPI app
-(`src/observability_api.py`, port 8100) exposes the same queue/document state for inspection, since
-Celery has no built-in UI equivalent to Prefect's. The per-concern logic lives under
+(`src/observability_api.py`, port 8100) exposes document/queue-row state for inspection (the
+document-domain view Prefect's UI didn't have an equivalent of either), alongside Flower
+(`celery -A celery_app flower`, port 5555) for Celery's own task/worker-level view (live worker
+status, task history/retries, per-queue depths). The per-concern logic lives under
 `src/ingestion/`:
 
 - `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist, concurrency limits).
@@ -135,7 +137,8 @@ This project uses `uv` for dependency management (Python >=3.12, deps pinned in 
 uv sync
 
 # start everything: redis, the per-document-type Celery workers, Celery beat (the cron
-# scheduler), and the read-only observability API (http://127.0.0.1:8100)
+# scheduler), Flower (Celery's monitoring UI, http://127.0.0.1:5555), and the read-only
+# observability API (http://127.0.0.1:8100)
 ./smart_files_ctl start
 
 # stop everything smart_files_ctl started

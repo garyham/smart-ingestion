@@ -9,6 +9,7 @@ dependencies = [
     "duckdb>=1.5.5",
     "fastapi>=0.115.0",
     "filetype>=1.2.0",
+    "flower>=2.0.1",
     "langchain-text-splitters>=0.3.0",
     "markitdown[docx]>=0.1.1",
     "pymupdf>=1.24.0",

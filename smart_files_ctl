@@ -10,6 +10,8 @@ REDIS_PORT="${REDIS_PORT:-6379}"
 REDIS_CONTAINER="smart-files-redis"
 REDIS_IMAGE="redis:7-alpine"
 API_URL="http://127.0.0.1:8100"
+FLOWER_PORT="${FLOWER_PORT:-5555}"
+FLOWER_URL="http://127.0.0.1:$FLOWER_PORT"
 
 STATE_DIR="state"
 PID_DIR="$STATE_DIR/pids"
@@ -121,6 +123,10 @@ print(c['pdf'], c['markitdown'], c['xlsx'])
   start_background beat uv run celery -A celery_app beat \
     --schedule="$STATE_DIR/celerybeat-schedule" --loglevel=INFO
 
+  echo "Flower (Celery monitoring UI):"
+  start_background flower uv run celery -A celery_app flower \
+    --port="$FLOWER_PORT" --loglevel=INFO
+
   echo "Observability API:"
   start_background observability-api uv run observability-api
 
@@ -128,19 +134,34 @@ print(c['pdf'], c['markitdown'], c['xlsx'])
   for _ in $(seq 1 20); do
     if curl -sf "$API_URL/health" >/dev/null 2>&1; then
       echo " - up."
+      break
+    fi
+    echo -n "."
+    sleep 0.5
+  done
+  if ! curl -sf "$API_URL/health" >/dev/null 2>&1; then
+    echo
+    echo "Observability API did not become healthy at $API_URL/health" >&2
+    exit 1
+  fi
+
+  echo -n "Waiting for Flower to come up"
+  for _ in $(seq 1 20); do
+    if curl -sf "$FLOWER_URL" >/dev/null 2>&1; then
+      echo " - up at $FLOWER_URL"
       return
     fi
     echo -n "."
     sleep 0.5
   done
   echo
-  echo "Observability API did not become healthy at $API_URL/health" >&2
+  echo "Flower did not become healthy at $FLOWER_URL" >&2
   exit 1
 }
 
 cmd_stop() {
   echo "Stopping services..."
-  for name in observability-api beat worker-default worker-xlsx worker-markitdown worker-pdf; do
+  for name in observability-api flower beat worker-default worker-xlsx worker-markitdown worker-pdf; do
     if pid_alive "$PID_DIR/$name.pid"; then
       echo "  stopping $name"
     fi

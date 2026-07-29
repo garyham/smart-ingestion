@@ -20,7 +20,7 @@ langchain_text_splitters, fastapi, etc.) into a local `.venv`.
 ## Operation
 
 ```bash
-# start everything: redis, the per-document-type Celery workers, Celery beat, and the
+# start everything: redis, the per-document-type Celery workers, Celery beat, Flower, and the
 # read-only observability API
 ./smart_files_ctl start
 ```
@@ -72,12 +72,15 @@ Spreadsheet types (Excel/ODS) are ingested into a `.duckdb` file under
 Other useful commands:
 
 ```bash
-# stop everything smart_files_ctl started (redis, workers, beat, observability API)
+# stop everything smart_files_ctl started (redis, workers, beat, Flower, observability API)
 ./smart_files_ctl stop
 
 # read-only observability API, for inspecting queue/document state directly
 curl http://127.0.0.1:8100/queue
 curl http://127.0.0.1:8100/documents/<doc_name>
+
+# Flower - Celery's own monitoring UI (worker status, task history/retries, queue depths)
+open http://127.0.0.1:5555
 ```
 
 `queue/` and `state/` (the SQLite queue tracking what's been seen/processed, plus worker/beat PID
@@ -145,9 +148,11 @@ This project's use of Celery is fairly narrow. The concepts that actually matter
   ingest task completes, without anything having to wait around for a result.
 
 Celery has a lot more surface than this (task retries/rate-limits, richer canvas primitives like
-groups and chords, a `Flower` monitoring UI, alternative brokers, etc.) - none of it is used here;
-this project's own `src/observability_api.py` covers the "what's the state of my documents" need
-instead.
+groups and chords, alternative brokers, etc.) - none of it is used here. Two things cover
+observability: `src/observability_api.py` is this project's own read-only view of *document/queue*
+state (what's pending, what succeeded/failed and why), while `Flower` (started by
+`smart_files_ctl`, at `http://127.0.0.1:5555`) is Celery's own monitoring UI for *task/worker*
+state (live worker status, task history and retries, per-queue depths).
 
 ## TODO
 
