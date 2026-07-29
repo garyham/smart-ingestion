@@ -59,6 +59,14 @@ def process_item(uri: str, output_root: Path) -> tuple[bool, str | None]:
     return _read_outcome(output_root, doc)
 
 
+@task
+def remove_from_queue_dir(uri: str) -> None:
+    """Delete a queued file once it's been processed (ok/needs_intervention/failed all count -
+    the raw document is preserved under ingested/<doc>/assets/ regardless of outcome).
+    """
+    _from_file_uri(uri).unlink(missing_ok=True)
+
+
 @flow(name="poll-and-ingest")
 def poll_and_ingest_flow(
     queue_dir: Path = Path("queue"),
@@ -77,6 +85,7 @@ def poll_and_ingest_flow(
             queue_db.mark_success(db_path, item_id)
         else:
             queue_db.mark_failed(db_path, item_id, error or "unknown error")
+        remove_from_queue_dir(uri)
 
 
 def _require_prefect_server() -> None:
