@@ -1,0 +1,36 @@
+# General ingestion pipeline configuration.
+
+# Whitelist of MIME types the ingestion pipeline is allowed to process.
+# Anything detected outside this list routes a document to failed rather
+# than being ingested.
+#
+# MIME types are grouped by how CLAUDE.md says they get handled downstream:
+# converted to markdown (pymupdf4llm for PDF, markitdown for everything else)
+# and chunked via langchain_text_splitters, or (xlsx/xls/ods) ingested into
+# DuckDB as a queryable node instead of being chunked.
+mime_types:
+  # PDF (pymupdf4llm)
+  - application/pdf
+
+  # Word processing (markitdown)
+  - application/msword
+  - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+  - application/vnd.oasis.opendocument.text
+
+  # Spreadsheets (ingested into DuckDB, not chunked)
+  - application/vnd.ms-excel
+  - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+  - application/vnd.oasis.opendocument.spreadsheet
+
+  # Plain text / markup (markitdown)
+  - text/csv
+  - text/html
+  - text/markdown
+  - text/plain
+
+  # Email (markitdown)
+  - message/rfc822
+
+# Number of documents to run through conversion/chunking concurrently.
+# Defaults to 1 (sequential) if not supplied.
+doc_pool: 2

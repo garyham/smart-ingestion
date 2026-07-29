@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+
+action="${1:-live}"
+
+case "$action" in
+  live)
+    uv run live
+    ;;
+  server)
+    uv run prefect server start
+    ;;
+  stop)
+    uv run prefect server stop
+    ;;
+  *)
+    echo "Usage: $0 [live|server|stop]" >&2
+    exit 1
+    ;;
+esac
