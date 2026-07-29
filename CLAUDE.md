@@ -5,10 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 `smart-files` is a proof-of-concept **document ingestion pipeline**. Source documents are dropped
-into a `queue/` folder; a Prefect deployment polls on a cron schedule, ingests new arrivals, and
-writes structured output to `ingested/`, using:
+into a `queue/` folder; a Celery Beat-scheduled poll task polls on a cron schedule, ingests new
+arrivals, and writes structured output to `ingested/`, using:
 
-- **Prefect** for workflow orchestration (tasks/flows).
+- **Celery** (with Redis as broker + result backend) for task scheduling/execution, with
+  per-document-type queues and worker pools for concurrency control.
 - **pymupdf4llm** to convert PDFs to markdown, and **markitdown** to convert other document types
   (Word/ODT, HTML, CSV, plain text, email) to markdown.
 - **langchain_text_splitters** to chunk the converted markdown for onward use by an LLM.
@@ -60,48 +61,66 @@ ingestion doesn't fully succeed, so the failure is inspectable rather than silen
 
 ## Current state of the code
 
-The pipeline described above is implemented, laid out as a `src/` package. `src/poll_ingest.py` is
-the entry point: `poll_and_ingest_flow` (registered as a Prefect deployment via
-`poll_and_ingest_flow.serve(cron=...)`) scans the `queue/` landing folder for files, records them in
-a SQLite queue table (`state/queue.db`, managed by `src/queue_db.py` — tracks
-`pending`/`processing`/`success`/`failed` per document URI; a URI already `pending`/`processing` is
-left alone so an in-flight document isn't queued twice, but any other prior status is reset to
-`pending` on rescan, so dropping a previously-processed file back into `queue/` re-ingests it
-regardless of past outcome), and routes each pending document to the right per-type ingestion
-subflow via `src/ingestion/routing.py`'s `route_document`. Pending documents are processed
-concurrently — each is submitted as a Prefect task (`process_item.submit(...)`) rather than called
-directly, so multiple documents ingest in parallel on the flow's task runner. Concurrency is
-additionally capped per document type via Prefect global concurrency limits (limits configured in
-`config/config.yaml`'s `concurrency_limits`, idempotently provisioned each poll cycle by
-`ensure_concurrency_limits`), so e.g. at most N PDF conversions run at once regardless of how many
-documents are queued overall. Each per-type ingestion path (pdf/markitdown/xlsx) is its own Prefect
-subflow, so each document still gets independent state/retries/logs regardless of how other
-documents fare. Scheduling requires a real Prefect server (`./prefect_server start`) —
-`poll_ingest.py` fails fast rather than silently degrading to an ephemeral server that can't run the
-cron schedule. The per-concern logic lives under
+The pipeline described above is implemented, laid out as a `src/` package. `src/celery_app.py`
+defines the Celery app (Redis broker + result backend, per-task-type queue routing, and the
+`beat_schedule` that replaces cron polling), and `src/tasks.py` holds all the Celery tasks:
+
+- `poll_and_enqueue_task` — Beat-triggered every minute. Scans the `queue/` landing folder for
+  files, records them in a SQLite queue table (`state/queue.db`, managed by `src/queue_db.py` —
+  tracks `pending`/`processing`/`success`/`failed` per document URI; a URI already
+  `pending`/`processing` is left alone so an in-flight document isn't queued twice, but any other
+  prior status is reset to `pending` on rescan, so dropping a previously-processed file back into
+  `queue/` re-ingests it regardless of past outcome), then fires off `dispatch_item_task` for every
+  pending row without waiting on any of them — Celery's chain continuation (see below) means no
+  join step is needed.
+- `dispatch_item_task` — detects a document's MIME type (`src/ingestion/detect.py`) and classifies
+  it (`src/ingestion/routing.py`'s `classify_document`) into `pdf`/`xlsx`/`markitdown`/`unsupported`,
+  then chains the matching ingestion task to `finalize_task` and fires it off.
+- `ingest_pdf_task` / `ingest_markitdown_task` / `ingest_xlsx_task` / `mark_unsupported_task` — each
+  routed to its own Celery queue (`pdf-ingest`, `markitdown-ingest`, `xlsx-ingest`, `default`).
+  Concurrency is capped per document type by starting each queue's worker process group with a
+  fixed `--concurrency` (values from `config/config.yaml`'s `concurrency_limits`, read by
+  `smart_files_ctl` at startup) — e.g. at most N PDF conversions run at once regardless of how many
+  documents are queued overall, enforced by the OS-level worker pool rather than a provisioned
+  server-side limit.
+- `finalize_task` — chained after every ingestion task; records `success`/`failed` in `queue_db` and
+  removes the file from `queue/` (the raw copy is preserved separately under
+  `ingested/<doc>/assets/` regardless of outcome).
+
+Each per-type ingestion task wraps a plain business-logic function that does convert-then-chunk (or
+xlsx-extract) as two sequential calls in one task body — not a further chain — so a worker's
+`--concurrency` on a typed queue caps full-pipeline concurrency for that type, not just the
+conversion step. Each of these functions has its own top-level `try/except Exception` safety net so
+an unexpected failure can never strand a queue row in `processing` forever. Scheduling requires
+Redis plus the Celery workers/beat to be running (`./smart_files_ctl start`), which fails fast if
+the observability API doesn't come up healthy. A small read-only FastAPI app
+(`src/observability_api.py`, port 8100) exposes the same queue/document state for inspection, since
+Celery has no built-in UI equivalent to Prefect's. The per-concern logic lives under
 `src/ingestion/`:
 
-- `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist).
+- `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist, concurrency limits).
 - `src/ingestion/detect.py` — MIME detection (`DetectedType`, `identify_mime_type`).
-- `src/ingestion/routing.py` — `route_document`, dispatching a detected document to the right
-  ingestion subflow (pdf/markitdown/xlsx) or marking it unsupported; shared by `poll_ingest.py`.
+- `src/ingestion/routing.py` — `classify_document`, mapping a detected MIME type to an ingestion
+  path, and `mark_unsupported` for anything outside the whitelist; used by `dispatch_item_task`.
+- `src/ingestion/outcome.py` — `read_outcome`, reads a document's `status.json` back into a
+  `(succeeded, error_detail)` tuple; shared by every ingestion task.
 - `src/ingestion/assets.py` — shared output-writing helpers (`copy_to_assets`, `write_status`,
   `write_metadata`) used by every ingestion path.
 - `src/ingestion/pdf_ingest.py` — converts PDFs to markdown via pymupdf4llm (`convert_pdf`), writing
-  assets/metadata, then chunks; `pdf_ingest_flow` is the subflow wrapping the two steps.
+  assets/metadata, then chunks; `run_pdf_ingest` wraps the two steps.
 - `src/ingestion/markitdown_ingest.py` — converts other non-xlsx document types to markdown via
   markitdown (`convert_with_markitdown`), writing assets/metadata, then chunks;
-  `markitdown_ingest_flow` is the subflow wrapping the two steps.
+  `run_markitdown_ingest` wraps the two steps.
 - `src/ingestion/chunking.py` — shared chunking step (`chunk_and_finalize`): splits converted markdown
   via `langchain_text_splitters` (header-aware split, then size-capped) and writes `chunks.jsonl` +
   the final `status.json` for non-xlsx types.
-- `src/ingestion/xlsx.py` — pure DuckDB library for xlsx ingestion (no Prefect dependency): locates
-  numeric/data sheets vs. metadata sheets (`Contents`, `Background Information`, `Notes`), maps sheet
-  numbers to titles via the `Contents` sheet's `Worksheet <n> – <title>` format, detects header rows,
-  slugifies column names, infers `BIGINT`/`DOUBLE`/`VARCHAR` column types, and computes per-column
-  summary stats.
-- `src/ingestion/xlsx_ingest.py` — `xlsx_ingest_flow`, the Prefect subflow wrapping
-  `src/ingestion/xlsx.py` that persists the DuckDB file and writes `metadata`/`status.json`.
+- `src/ingestion/xlsx.py` — pure DuckDB library for xlsx ingestion (no orchestration-framework
+  dependency): locates numeric/data sheets vs. metadata sheets (`Contents`, `Background
+  Information`, `Notes`), maps sheet numbers to titles via the `Contents` sheet's
+  `Worksheet <n> – <title>` format, detects header rows, slugifies column names, infers
+  `BIGINT`/`DOUBLE`/`VARCHAR` column types, and computes per-column summary stats.
+- `src/ingestion/xlsx_ingest.py` — `run_xlsx_ingest`, wrapping `src/ingestion/xlsx.py` to persist
+  the DuckDB file and write `metadata`/`status.json`.
 
 There is no downstream Q&A/chat loop in this codebase — that concern is out of scope per the
 invariants below, and ingestion stops once metadata, (optional) chunks, and (for xlsx) the queryable
@@ -115,21 +134,17 @@ This project uses `uv` for dependency management (Python >=3.12, deps pinned in 
 # install dependencies
 uv sync
 
-# start the Prefect server (required for the poller's cron schedule to run)
-./prefect_server start
+# start everything: redis, the per-document-type Celery workers, Celery beat (the cron
+# scheduler), and the read-only observability API (http://127.0.0.1:8100)
+./smart_files_ctl start
 
-# in another terminal: start the poller, which watches queue/ and ingests
-# new arrivals into ingested/ on a cron schedule
-uv run poll
-
-# stop the poller with Ctrl-C in its terminal
-
-# stop the Prefect server
-./prefect_server stop
+# stop everything smart_files_ctl started
+./smart_files_ctl stop
 ```
 
 Drop a file into `queue/` and it'll be picked up (and recorded in `state/queue.db`) on the next
-poll. `queue/` and `state/` are gitignored, local-only working directories.
+poll (every minute). `queue/` and `state/` (which now also holds worker/beat PID files and logs
+under `state/pids/` and `state/logs/`) are gitignored, local-only working directories.
 
 There is no lint/test/build tooling configured yet.
 

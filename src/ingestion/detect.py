@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import filetype
-from prefect import task
 
 
 @dataclass
@@ -12,7 +11,6 @@ class DetectedType:
     from_content: bool  # False when we had to fall back to the extension hint
 
 
-@task
 def identify_mime_type(path: Path) -> DetectedType:
     """Identify a document's MIME type from its content; the extension is only a fallback hint."""
     mime = filetype.guess_mime(str(path))

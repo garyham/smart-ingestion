@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Lifecycle script for the Celery-based ingestion pipeline - replaces the old `prefect_server`.
+# Owns Redis (broker+backend), the per-document-type Celery workers, Celery Beat (the cron
+# scheduler replacing Prefect's `.serve(cron=...)`), and the read-only observability API.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
+REDIS_PORT="${REDIS_PORT:-6379}"
+REDIS_CONTAINER="smart-files-redis"
+REDIS_IMAGE="redis:7-alpine"
+API_URL="http://127.0.0.1:8100"
+
+STATE_DIR="state"
+PID_DIR="$STATE_DIR/pids"
+LOG_DIR="$STATE_DIR/logs"
+
+# No redis-server/redis-cli binaries assumed on the host - check reachability via the `redis`
+# Python client (already a transitive dependency of celery[redis]) instead.
+redis_reachable() {
+  uv run python -c "
+import redis, sys
+try:
+    redis.Redis(host='$REDIS_HOST', port=$REDIS_PORT, socket_connect_timeout=2).ping()
+except Exception:
+    sys.exit(1)
+" >/dev/null 2>&1
+}
+
+# Redis runs as a dedicated named Docker container rather than a bare `redis-server` process,
+# since neither binary is assumed to be installed on the host.
+start_redis() {
+  if redis_reachable; then
+    echo "  already reachable at $REDIS_HOST:$REDIS_PORT"
+    return
+  fi
+  if docker ps -a --format '{{.Names}}' | grep -qx "$REDIS_CONTAINER"; then
+    docker start "$REDIS_CONTAINER" >/dev/null
+  else
+    docker run -d --name "$REDIS_CONTAINER" -p "$REDIS_PORT:6379" "$REDIS_IMAGE" >/dev/null
+  fi
+  for _ in $(seq 1 20); do
+    if redis_reachable; then
+      echo "  container '$REDIS_CONTAINER' up at $REDIS_HOST:$REDIS_PORT"
+      return
+    fi
+    sleep 0.5
+  done
+  echo "Redis did not become reachable" >&2
+  exit 1
+}
+
+stop_redis() {
+  # Only this dedicated container is ours to stop - if redis was already reachable via some
+  # other means at start time, this container was never created, so there's nothing to do here.
+  if docker ps --format '{{.Names}}' | grep -qx "$REDIS_CONTAINER"; then
+    echo "  stopping redis container '$REDIS_CONTAINER'"
+    docker stop "$REDIS_CONTAINER" >/dev/null
+  else
+    echo "  redis container '$REDIS_CONTAINER' not running, nothing to stop"
+  fi
+}
+
+pid_alive() {
+  [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null
+}
+
+start_background() {
+  # start_background <name> <command...>
+  local name="$1"; shift
+  if pid_alive "$PID_DIR/$name.pid"; then
+    echo "  $name already running (pid $(cat "$PID_DIR/$name.pid"))"
+    return
+  fi
+  "$@" >"$LOG_DIR/$name.log" 2>&1 &
+  echo $! > "$PID_DIR/$name.pid"
+  echo "  $name started (pid $!), logging to $LOG_DIR/$name.log"
+}
+
+stop_pid_file() {
+  local pid_file="$1"
+  [ -f "$pid_file" ] || return 0
+  local pid; pid=$(cat "$pid_file")
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.5
+    done
+  fi
+  rm -f "$pid_file"
+}
+
+cmd_start() {
+  mkdir -p "$PID_DIR" "$LOG_DIR"
+
+  echo "Redis:"
+  start_redis
+
+  echo "Reading concurrency_limits from config/config.yaml:"
+  read -r PDF_N MD_N XLSX_N < <(
+    uv run python -c "
+from ingestion.config import load_config
+c = load_config()['concurrency_limits']
+print(c['pdf'], c['markitdown'], c['xlsx'])
+"
+  )
+  echo "  pdf=$PDF_N markitdown=$MD_N xlsx=$XLSX_N"
+
+  echo "Celery workers:"
+  start_background worker-pdf uv run celery -A celery_app worker -Q pdf-ingest \
+    --concurrency="$PDF_N" --pool=prefork -n pdf@%h --loglevel=INFO
+  start_background worker-markitdown uv run celery -A celery_app worker -Q markitdown-ingest \
+    --concurrency="$MD_N" --pool=prefork -n markitdown@%h --loglevel=INFO
+  start_background worker-xlsx uv run celery -A celery_app worker -Q xlsx-ingest \
+    --concurrency="$XLSX_N" --pool=prefork -n xlsx@%h --loglevel=INFO
+  start_background worker-default uv run celery -A celery_app worker -Q default \
+    --concurrency=4 --pool=prefork -n default@%h --loglevel=INFO
+
+  echo "Celery beat:"
+  start_background beat uv run celery -A celery_app beat \
+    --schedule="$STATE_DIR/celerybeat-schedule" --loglevel=INFO
+
+  echo "Observability API:"
+  start_background observability-api uv run observability-api
+
+  echo -n "Waiting for observability API to come up"
+  for _ in $(seq 1 20); do
+    if curl -sf "$API_URL/health" >/dev/null 2>&1; then
+      echo " - up."
+      return
+    fi
+    echo -n "."
+    sleep 0.5
+  done
+  echo
+  echo "Observability API did not become healthy at $API_URL/health" >&2
+  exit 1
+}
+
+cmd_stop() {
+  echo "Stopping services..."
+  for name in observability-api beat worker-default worker-xlsx worker-markitdown worker-pdf; do
+    if pid_alive "$PID_DIR/$name.pid"; then
+      echo "  stopping $name"
+    fi
+    stop_pid_file "$PID_DIR/$name.pid"
+  done
+
+  stop_redis
+}
+
+action="${1:-start}"
+case "$action" in
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  *)
+    echo "Usage: $0 [start|stop]" >&2
+    exit 1
+    ;;
+esac

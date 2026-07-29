@@ -5,18 +5,19 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "celery[redis]>=5.4.0",
     "duckdb>=1.5.5",
+    "fastapi>=0.115.0",
     "filetype>=1.2.0",
     "langchain-text-splitters>=0.3.0",
     "markitdown[docx]>=0.1.1",
-    "prefect>=3.8.0",
     "pymupdf>=1.24.0",
     "pymupdf4llm>=0.0.17",
+    "uvicorn>=0.32.0",
 ]
 
 [project.scripts]
-poll = "poll_ingest:main"
-clean-runs = "clean_runs:main"
+observability-api = "observability_api:main"
 ask = "llm_test:main"
 
 [build-system]
@@ -25,7 +26,15 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 sources = ["src"]
-include = ["src/poll_ingest.py", "src/queue_db.py", "src/clean_runs.py", "src/llm_test.py", "src/ingestion"]
+include = [
+    "src/celery_app.py",
+    "src/tasks.py",
+    "src/observability_api.py",
+    "src/queue_db.py",
+    "src/queue_uri.py",
+    "src/llm_test.py",
+    "src/ingestion",
+]
 
 [dependency-groups]
 dev = [

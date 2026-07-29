@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
-from prefect import task
 
 from ingestion.assets import write_status
 
@@ -14,7 +13,6 @@ _header_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_HEADERS_TO_SP
 _size_splitter = RecursiveCharacterTextSplitter(chunk_size=_CHUNK_SIZE, chunk_overlap=_CHUNK_OVERLAP)
 
 
-@task
 def chunk_and_finalize(doc: Path, output_root: Path, markdown: str | None) -> None:
     """Split a converted document's markdown via langchain_text_splitters and write chunks.jsonl
     plus the final status. If `markdown` is None, the conversion step already failed and wrote

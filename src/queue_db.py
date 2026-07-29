@@ -5,7 +5,12 @@ from pathlib import Path
 
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(db_path, timeout=30)
+    conn = sqlite3.connect(db_path, timeout=30)
+    # WAL mode lets readers (e.g. a poll cycle's list_pending) avoid blocking behind an
+    # in-flight writer's lock - needed now that multiple worker processes can touch this
+    # DB concurrently, rather than a single flow run's main thread as before.
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
 
 
 def _now() -> str:

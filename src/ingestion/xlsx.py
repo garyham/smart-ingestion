@@ -1,7 +1,7 @@
 """xlsx ingestion: wraps a workbook in DuckDB and extracts metadata via standard queries.
 
-Pure DuckDB library with no Prefect dependency; the `xlsx_ingest_flow` subflow that
-calls into this module lives in `ingestion/xlsx_ingest.py`.
+Pure DuckDB library with no orchestration-framework dependency; the `run_xlsx_ingest` task
+that calls into this module lives in `ingestion/xlsx_ingest.py`.
 """
 
 import re
