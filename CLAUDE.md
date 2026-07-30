@@ -61,9 +61,13 @@ ingestion doesn't fully succeed, so the failure is inspectable rather than silen
 
 ## Current state of the code
 
-The pipeline described above is implemented, laid out as a `src/` package. `src/celery_app.py`
-defines the Celery app (Redis broker + result backend, per-task-type queue routing, and the
-`beat_schedule` that replaces cron polling), and `src/tasks.py` holds all the Celery tasks:
+The pipeline described above is implemented, laid out as a `src/` package. Everything runs as
+Docker Compose services (`compose.yml`, image built from the root `Dockerfile`) — one container
+per Celery worker queue plus Redis, Beat, Flower, and the observability API, all bind-mounting
+`queue/`, `ingested/`, `state/`, `data/`, and `config/` from the host so containers see the same
+files as the host. `src/celery_app.py` defines the Celery app (Redis broker + result backend,
+per-task-type queue routing, and the `beat_schedule` that replaces cron polling), and `src/tasks.py`
+holds all the Celery tasks:
 
 - `poll_and_enqueue_task` — Beat-triggered every minute. Scans the `queue/` landing folder for
   files, records them in a SQLite queue table (`state/queue.db`, managed by `src/queue_db.py` —
@@ -79,10 +83,10 @@ defines the Celery app (Redis broker + result backend, per-task-type queue routi
 - `ingest_pdf_task` / `ingest_markitdown_task` / `ingest_xlsx_task` / `mark_unsupported_task` — each
   routed to its own Celery queue (`pdf-ingest`, `markitdown-ingest`, `xlsx-ingest`, `default`).
   Concurrency is capped per document type by starting each queue's worker process group with a
-  fixed `--concurrency` (values from `config/config.yaml`'s `concurrency_limits`, read by
-  `smart_files_ctl` at startup) — e.g. at most N PDF conversions run at once regardless of how many
-  documents are queued overall, enforced by the OS-level worker pool rather than a provisioned
-  server-side limit.
+  fixed `--concurrency` (values from the `PDF_CONCURRENCY`/`MARKITDOWN_CONCURRENCY`/
+  `XLSX_CONCURRENCY` env vars, defaulted in `compose.yml`) — e.g. at most N PDF conversions run
+  at once regardless of how many documents are queued overall, enforced by the OS-level worker pool
+  rather than a provisioned server-side limit.
 - `finalize_task` — chained after every ingestion task; records `success`/`failed` in `queue_db` and
   removes the file from `queue/` (the raw copy is preserved separately under
   `ingested/<doc>/assets/` regardless of outcome).
@@ -92,15 +96,15 @@ xlsx-extract) as two sequential calls in one task body — not a further chain �
 `--concurrency` on a typed queue caps full-pipeline concurrency for that type, not just the
 conversion step. Each of these functions has its own top-level `try/except Exception` safety net so
 an unexpected failure can never strand a queue row in `processing` forever. Scheduling requires
-Redis plus the Celery workers/beat to be running (`./smart_files_ctl start`), which fails fast if
-the observability API doesn't come up healthy. A small read-only FastAPI app
+Redis plus the Celery workers/beat to be running (`docker compose up`), which depends on the
+observability API container passing its healthcheck. A small read-only FastAPI app
 (`src/observability_api.py`, port 8100) exposes document/queue-row state for inspection (the
 document-domain view Prefect's UI didn't have an equivalent of either), alongside Flower
 (`celery -A celery_app flower`, port 5555) for Celery's own task/worker-level view (live worker
 status, task history/retries, per-queue depths). The per-concern logic lives under
 `src/ingestion/`:
 
-- `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist, concurrency limits).
+- `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist).
 - `src/ingestion/detect.py` — MIME detection (`DetectedType`, `identify_mime_type`).
 - `src/ingestion/routing.py` — `classify_document`, mapping a detected MIME type to an ingestion
   path, and `mark_unsupported` for anything outside the whitelist; used by `dispatch_item_task`.
@@ -133,21 +137,22 @@ DuckDB file are written to `ingested/<doc_name>/`.
 This project uses `uv` for dependency management (Python >=3.12, deps pinned in `uv.lock`).
 
 ```bash
-# install dependencies
+# install dependencies (for local dev/IDE support; not required to run the pipeline itself)
 uv sync
 
 # start everything: redis, the per-document-type Celery workers, Celery beat (the cron
 # scheduler), Flower (Celery's monitoring UI, http://127.0.0.1:5555), and the read-only
 # observability API (http://127.0.0.1:8100)
-./smart_files_ctl start
+docker compose up -d --build
 
-# stop everything smart_files_ctl started
-./smart_files_ctl stop
+# stop everything
+docker compose down
 ```
 
 Drop a file into `queue/` and it'll be picked up (and recorded in `state/queue.db`) on the next
-poll (every minute). `queue/` and `state/` (which now also holds worker/beat PID files and logs
-under `state/pids/` and `state/logs/`) are gitignored, local-only working directories.
+poll (every minute). `queue/` and `state/` (which also holds the Celery Beat schedule file) are
+gitignored, local-only working directories, bind-mounted into every container by `compose.yml` so
+containers see the same files as the host.
 
 There is no lint/test/build tooling configured yet.
 

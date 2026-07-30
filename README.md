@@ -6,23 +6,24 @@ Beat-scheduled poll task polls on a cron schedule and ingests new arrivals into 
 
 ## Installation
 
-Requires Python >=3.12, [`uv`](https://docs.astral.sh/uv/), and a local `redis-server`/`redis-cli`
-install (used as the Celery broker + result backend).
+Requires [Docker](https://docs.docker.com/get-docker/) with Compose v2 (`docker compose`, not the
+old standalone `docker-compose`). Everything else (Python, Celery, Redis, pymupdf4llm, markitdown,
+duckdb, etc.) is installed inside the images built by `compose.yml`.
 
 ```bash
 # clone the repo, then from its root:
-uv sync
+docker compose build
 ```
 
-This installs the pinned dependencies from `uv.lock` (Celery, pymupdf4llm, markitdown, duckdb,
-langchain_text_splitters, fastapi, etc.) into a local `.venv`.
+`uv sync` (requires Python >=3.12 and [`uv`](https://docs.astral.sh/uv/) locally) is only needed
+for local dev/IDE support (type checking, editor autocomplete) — not to run the pipeline itself.
 
 ## Operation
 
 ```bash
 # start everything: redis, the per-document-type Celery workers, Celery beat, Flower, and the
 # read-only observability API
-./smart_files_ctl start
+docker compose up -d --build
 ```
 
 With everything running, drop a document into `queue/` and it's picked up on the next poll (every
@@ -72,8 +73,11 @@ Spreadsheet types (Excel/ODS) are ingested into a `.duckdb` file under
 Other useful commands:
 
 ```bash
-# stop everything smart_files_ctl started (redis, workers, beat, Flower, observability API)
-./smart_files_ctl stop
+# stop everything (redis, workers, beat, Flower, observability API)
+docker compose down
+
+# tail logs for a given service
+docker compose logs -f worker-pdf
 
 # read-only observability API, for inspecting queue/document state directly
 curl http://127.0.0.1:8100/queue
@@ -83,8 +87,14 @@ curl http://127.0.0.1:8100/documents/<doc_name>
 open http://127.0.0.1:5555
 ```
 
-`queue/` and `state/` (the SQLite queue tracking what's been seen/processed, plus worker/beat PID
-files and logs) are gitignored, local-only working directories.
+Per-document-type concurrency is set via the `PDF_CONCURRENCY`/`MARKITDOWN_CONCURRENCY`/
+`XLSX_CONCURRENCY` env vars read by `compose.yml` (defaults: 2/4/2) — e.g.
+`PDF_CONCURRENCY=4 docker compose up -d --build`, or set them in a `.env` file next to
+`compose.yml`.
+
+`queue/`, `ingested/`, and `state/` (the SQLite queue tracking what's been seen/processed, plus the
+Celery Beat schedule file) are gitignored, local-only working directories, bind-mounted into every
+container so containers see the same files as the host.
 
 ## How it works
 
@@ -130,14 +140,17 @@ This project's use of Celery is fairly narrow. The concepts that actually matter
   `markitdown-ingest`, `xlsx-ingest`, or `default` for the lightweight scan/dispatch/finalize
   work). This is what lets PDF-heavy work be scaled/capped independently of everything else.
 - **Worker** - a process that connects to the broker and executes tasks from one or more queues
-  (`celery -A celery_app worker -Q <queue> --concurrency=N ...`, see `smart_files_ctl`). `-Q`
-  picks which queue(s) it drains; `--concurrency=N` is how many tasks it runs in parallel. This
-  project uses `--pool=prefork` (Celery's default), meaning each of those N slots is a separate OS
-  process rather than a thread - the right choice here since PDF/markitdown conversion is
-  CPU-bound native code that wouldn't parallelize well under Python's GIL with threads. One worker
-  process group per typed queue, each started with its own `--concurrency` (read from
-  `config/config.yaml`'s `concurrency_limits`), is the entire mechanism behind "at most N PDFs
-  converting at once."
+  (`celery -A celery_app worker -Q <queue> --concurrency=N ...`, one per container in
+  `compose.yml`). `-Q` picks which queue(s) it drains; `--concurrency=N` is how many tasks it runs
+  in parallel. This project uses `--pool=prefork` (Celery's default), meaning each of those N slots
+  is a separate OS process rather than a thread - the right choice here since PDF/markitdown
+  conversion is CPU-bound native code that wouldn't parallelize well under Python's GIL with
+  threads; containerizing a worker doesn't change this - the forked processes still run directly
+  on the host kernel, scheduled across all its cores like any other process, since nothing in
+  `compose.yml` restricts a container's CPU set. One worker process group per typed queue, each
+  started with its own `--concurrency` (from the `PDF_CONCURRENCY`/`MARKITDOWN_CONCURRENCY`/
+  `XLSX_CONCURRENCY` env vars, defaulted in `compose.yml`), is the entire mechanism behind "at most
+  N PDFs converting at once."
 - **Beat** - a separate scheduler process (`celery -A celery_app beat`) that runs no task logic
   itself. On the cron-like schedule in `beat_schedule` (`celery_app.py`), it just enqueues
   `poll_and_enqueue_task` for a worker to pick up - this is the direct replacement for what
@@ -150,9 +163,9 @@ This project's use of Celery is fairly narrow. The concepts that actually matter
 Celery has a lot more surface than this (task retries/rate-limits, richer canvas primitives like
 groups and chords, alternative brokers, etc.) - none of it is used here. Two things cover
 observability: `src/observability_api.py` is this project's own read-only view of *document/queue*
-state (what's pending, what succeeded/failed and why), while `Flower` (started by
-`smart_files_ctl`, at `http://127.0.0.1:5555`) is Celery's own monitoring UI for *task/worker*
-state (live worker status, task history and retries, per-queue depths).
+state (what's pending, what succeeded/failed and why), while `Flower` (its own container in
+`compose.yml`, at `http://127.0.0.1:5555`) is Celery's own monitoring UI for *task/worker* state
+(live worker status, task history and retries, per-queue depths).
 
 ## TODO
 

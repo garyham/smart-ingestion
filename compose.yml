@@ -1,0 +1,74 @@
+x-worker-base: &worker-base
+  build: .
+  depends_on:
+    redis:
+      condition: service_healthy
+  volumes:
+    - ./queue:/app/queue
+    - ./ingested:/app/ingested
+    - ./state:/app/state
+    - ./data:/app/data
+    - ./config:/app/config
+  environment:
+    - CELERY_BROKER_URL=redis://redis:6379/0
+    - CELERY_RESULT_BACKEND=redis://redis:6379/1
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  worker-pdf:
+    <<: *worker-base
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CONCURRENCY=${PDF_CONCURRENCY:-2}
+    command: sh -c 'celery -A celery_app worker -Q pdf-ingest --concurrency=$$CONCURRENCY --pool=prefork -n pdf@%h --loglevel=INFO'
+
+  worker-markitdown:
+    <<: *worker-base
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CONCURRENCY=${MARKITDOWN_CONCURRENCY:-4}
+    command: sh -c 'celery -A celery_app worker -Q markitdown-ingest --concurrency=$$CONCURRENCY --pool=prefork -n markitdown@%h --loglevel=INFO'
+
+  worker-xlsx:
+    <<: *worker-base
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CONCURRENCY=${XLSX_CONCURRENCY:-2}
+    command: sh -c 'celery -A celery_app worker -Q xlsx-ingest --concurrency=$$CONCURRENCY --pool=prefork -n xlsx@%h --loglevel=INFO'
+
+  worker-default:
+    <<: *worker-base
+    command: celery -A celery_app worker -Q default --concurrency=4 --pool=prefork -n default@%h --loglevel=INFO
+
+  beat:
+    <<: *worker-base
+    command: celery -A celery_app beat --schedule=/app/state/celerybeat-schedule --loglevel=INFO
+
+  flower:
+    <<: *worker-base
+    command: celery -A celery_app flower --port=5555 --loglevel=INFO
+    ports:
+      - "5555:5555"
+
+  observability-api:
+    <<: *worker-base
+    command: observability-api
+    ports:
+      - "8100:8100"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8100/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

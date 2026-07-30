@@ -30,12 +30,3 @@ mime_types:
 
   # Email (markitdown)
   - message/rfc822
-
-# Per-document-type concurrency caps. Read by `smart_files_ctl` at startup and passed as each
-# Celery worker's `--concurrency` flag, so at most this many ingestions of each type run at once
-# (one dedicated worker process group per type: pdf-ingest, markitdown-ingest, xlsx-ingest queues),
-# regardless of how many documents are being processed concurrently overall.
-concurrency_limits:
-  pdf: 2
-  markitdown: 4
-  xlsx: 2
