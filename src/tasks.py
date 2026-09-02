@@ -2,7 +2,6 @@ from pathlib import Path
 
 from celery import chain
 
-import queue_db
 from celery_app import app
 from ingestion.config import load_config
 from ingestion.detect import DetectedType, identify_mime_type
@@ -17,8 +16,8 @@ _config = load_config()
 _allowed_mime_types = set(_config["mime_types"])
 
 _QUEUE_DIR = Path("queue")
+_PROCESSING_DIR = _QUEUE_DIR / ".processing"
 _OUTPUT_ROOT = Path("ingested")
-_DB_PATH = Path("state/queue.db")
 
 
 @app.task
@@ -59,14 +58,10 @@ def ingest_xlsx_task(
 
 
 @app.task
-def finalize_task(outcome: tuple[bool, str | None], item_id: int, uri: str) -> None:
-    succeeded, error = outcome
-    if succeeded:
-        queue_db.mark_success(_DB_PATH, item_id)
-    else:
-        queue_db.mark_failed(_DB_PATH, item_id, error or "unknown error")
-    # Delete regardless of outcome - the raw document is preserved under
-    # ingested/<doc>/assets/ regardless of how ingestion went.
+def finalize_task(outcome: tuple[bool, str | None], uri: str) -> None:
+    # The claimed copy under queue/.processing/ is removed regardless of outcome - the raw
+    # document is preserved separately under ingested/<doc>/assets/, and success/failure is
+    # already durably recorded in that document's status.json.
     from_file_uri(uri).unlink(missing_ok=True)
 
 
@@ -79,7 +74,7 @@ _TASK_FOR_KIND = {
 
 
 @app.task
-def dispatch_item_task(item_id: int, uri: str) -> None:
+def dispatch_item_task(uri: str) -> None:
     """Detect a queued document's type and hand it off to the matching ingestion task, chained
     to finalize_task so both success and any unhandled exception reach finalization.
     """
@@ -87,27 +82,28 @@ def dispatch_item_task(item_id: int, uri: str) -> None:
         doc = from_file_uri(uri)
         detected = identify_mime_type(doc)
         kind = classify_document(detected.mime_type, _allowed_mime_types)
-    except Exception as exc:  # noqa: BLE001 - must not strand the queue row in 'processing'
-        finalize_task.si((False, str(exc)), item_id, uri).apply_async()
+    except Exception as exc:  # noqa: BLE001 - must not strand a claimed file in .processing/ forever
+        finalize_task.si((False, str(exc)), uri).apply_async()
         return
 
     ingest_task = _TASK_FOR_KIND[kind]
     args = (str(doc), detected.mime_type, detected.from_content, str(_OUTPUT_ROOT))
-    chain(ingest_task.s(*args), finalize_task.s(item_id, uri)).apply_async()
+    chain(ingest_task.s(*args), finalize_task.s(uri)).apply_async()
 
 
 @app.task
 def poll_and_enqueue_task() -> None:
-    """Beat-triggered, every minute: scan queue/, enqueue new arrivals, and dispatch every
-    pending item. Fires all dispatches without waiting on them, mirroring the "submit everything,
-    then let them run concurrently" intent of the old Prefect flow - Celery's chain continuation
-    means there's no join step needed here at all.
+    """Beat-triggered, every minute: scan queue/ and claim every file found by moving it into
+    queue/.processing/ before dispatching it. The move is what stops a file that's still being
+    processed from being picked up again on the next tick - no separate pending/processing table
+    needed, since the file's location on disk *is* the state.
     """
-    queue_db.init_db(_DB_PATH)
     _QUEUE_DIR.mkdir(parents=True, exist_ok=True)
-    uris = [to_file_uri(p) for p in sorted(_QUEUE_DIR.iterdir()) if p.is_file()]
-    queue_db.enqueue(_DB_PATH, uris)
+    _PROCESSING_DIR.mkdir(parents=True, exist_ok=True)
 
-    for item_id, uri in queue_db.list_pending(_DB_PATH):
-        queue_db.mark_processing(_DB_PATH, item_id)
-        dispatch_item_task.apply_async(args=(item_id, uri))
+    for p in sorted(_QUEUE_DIR.iterdir()):
+        if not p.is_file():
+            continue
+        claimed = _PROCESSING_DIR / p.name
+        p.rename(claimed)
+        dispatch_item_task.apply_async(args=(to_file_uri(claimed),))

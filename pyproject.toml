@@ -31,7 +31,6 @@ include = [
     "src/celery_app.py",
     "src/tasks.py",
     "src/observability_api.py",
-    "src/queue_db.py",
     "src/queue_uri.py",
     "src/llm_test.py",
     "src/ingestion",

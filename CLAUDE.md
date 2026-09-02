@@ -70,13 +70,11 @@ per-task-type queue routing, and the `beat_schedule` that replaces cron polling)
 holds all the Celery tasks:
 
 - `poll_and_enqueue_task` — Beat-triggered every minute. Scans the `queue/` landing folder for
-  files, records them in a SQLite queue table (`state/queue.db`, managed by `src/queue_db.py` —
-  tracks `pending`/`processing`/`success`/`failed` per document URI; a URI already
-  `pending`/`processing` is left alone so an in-flight document isn't queued twice, but any other
-  prior status is reset to `pending` on rescan, so dropping a previously-processed file back into
-  `queue/` re-ingests it regardless of past outcome), then fires off `dispatch_item_task` for every
-  pending row without waiting on any of them — Celery's chain continuation (see below) means no
-  join step is needed.
+  files and claims each one found by moving it into `queue/.processing/` before dispatching it —
+  the move itself is what stops the next poll tick from re-dispatching a file that's still being
+  processed, so there's no separate pending/processing state to track: the file's location on disk
+  *is* the state. Fires off `dispatch_item_task` for every claimed file without waiting on any of
+  them — Celery's chain continuation (see below) means no join step is needed.
 - `dispatch_item_task` — detects a document's MIME type (`src/ingestion/detect.py`) and classifies
   it (`src/ingestion/routing.py`'s `classify_document`) into `pdf`/`xlsx`/`markitdown`/`unsupported`,
   then chains the matching ingestion task to `finalize_task` and fires it off.
@@ -87,15 +85,16 @@ holds all the Celery tasks:
   `XLSX_CONCURRENCY` env vars, defaulted in `compose.yml`) — e.g. at most N PDF conversions run
   at once regardless of how many documents are queued overall, enforced by the OS-level worker pool
   rather than a provisioned server-side limit.
-- `finalize_task` — chained after every ingestion task; records `success`/`failed` in `queue_db` and
-  removes the file from `queue/` (the raw copy is preserved separately under
-  `ingested/<doc>/assets/` regardless of outcome).
+- `finalize_task` — chained after every ingestion task; removes the claimed file from
+  `queue/.processing/` regardless of outcome (the raw copy is preserved separately under
+  `ingested/<doc>/assets/`; success/failure is already durably recorded in that document's own
+  `status.json`, so there's no separate queue-level success/failed record to update).
 
 Each per-type ingestion task wraps a plain business-logic function that does convert-then-chunk (or
 xlsx-extract) as two sequential calls in one task body — not a further chain — so a worker's
 `--concurrency` on a typed queue caps full-pipeline concurrency for that type, not just the
 conversion step. Each of these functions has its own top-level `try/except Exception` safety net so
-an unexpected failure can never strand a queue row in `processing` forever. Scheduling requires
+an unexpected failure can never strand a claimed file in `queue/.processing/` forever. Scheduling requires
 Redis plus the Celery workers/beat to be running (`docker compose up`), which depends on the
 observability API container passing its healthcheck. A small read-only FastAPI app
 (`src/observability_api.py`, port 8100) exposes document/queue-row state for inspection (the
@@ -149,8 +148,8 @@ docker compose up -d --build
 docker compose down
 ```
 
-Drop a file into `queue/` and it'll be picked up (and recorded in `state/queue.db`) on the next
-poll (every minute). `queue/` and `state/` (which also holds the Celery Beat schedule file) are
+Drop a file into `queue/` and it'll be picked up (claimed into `queue/.processing/`) on the next
+poll (every minute). `queue/` and `state/` (which just holds the Celery Beat schedule file) are
 gitignored, local-only working directories, bind-mounted into every container by `compose.yml` so
 containers see the same files as the host.
 

@@ -1,33 +1,22 @@
 """Read-only observability API for the ingestion pipeline.
 
-Exposes document-level state - the queue (`state/queue.db`) and each document's ingestion
-outcome under `ingested/` - as JSON. Deliberately has no Celery/Redis dependency of its own: it
-reads only the same on-disk state the pipeline already writes, so it keeps working unchanged even
-if the orchestration engine changes again later. Read-only by design - no requeue/cancel endpoints.
+Exposes document-level state - the queue (`queue/`) and each document's ingestion outcome under
+`ingested/` - as JSON. Deliberately has no Celery/Redis dependency of its own: it reads only the
+same on-disk state the pipeline already writes, so it keeps working unchanged even if the
+orchestration engine changes again later. Read-only by design - no requeue/cancel endpoints.
 """
 
 import json
-import sqlite3
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 
-_DB_PATH = Path("state/queue.db")
+_QUEUE_DIR = Path("queue")
+_PROCESSING_DIR = _QUEUE_DIR / ".processing"
 _OUTPUT_ROOT = Path("ingested")
 
 app = FastAPI(title="smart-files observability API")
-
-
-def _connect_ro() -> sqlite3.Connection:
-    """Open the queue DB strictly read-only at the SQLite level - a structural guarantee this
-    process can never write to it, reinforcing the read-only scope beyond just omitting endpoints.
-    """
-    if not _DB_PATH.exists():
-        raise HTTPException(status_code=503, detail=f"{_DB_PATH} does not exist yet")
-    conn = sqlite3.connect(f"file:{_DB_PATH}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 @app.get("/health")
@@ -36,24 +25,19 @@ def health() -> dict:
 
 
 @app.get("/queue")
-def list_queue(status: str | None = None) -> list[dict]:
-    with _connect_ro() as conn:
-        if status is not None:
-            rows = conn.execute(
-                "SELECT * FROM queue_items WHERE status = ? ORDER BY id", (status,)
-            ).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM queue_items ORDER BY id").fetchall()
-    return [dict(row) for row in rows]
-
-
-@app.get("/queue/{item_id}")
-def get_queue_item(item_id: int) -> dict:
-    with _connect_ro() as conn:
-        row = conn.execute("SELECT * FROM queue_items WHERE id = ?", (item_id,)).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"no queue item with id {item_id}")
-    return dict(row)
+def list_queue() -> list[dict]:
+    """Queue state is just what's on disk: a file under queue/ is pending, a file under
+    queue/.processing/ has been claimed and dispatched.
+    """
+    pending = [
+        {"name": p.name, "status": "pending"} for p in sorted(_QUEUE_DIR.iterdir()) if p.is_file()
+    ] if _QUEUE_DIR.exists() else []
+    processing = [
+        {"name": p.name, "status": "processing"}
+        for p in sorted(_PROCESSING_DIR.iterdir())
+        if p.is_file()
+    ] if _PROCESSING_DIR.exists() else []
+    return pending + processing
 
 
 def _read_json(path: Path) -> dict | None:

@@ -92,9 +92,9 @@ Per-document-type concurrency is set via the `PDF_CONCURRENCY`/`MARKITDOWN_CONCU
 `PDF_CONCURRENCY=4 docker compose up -d --build`, or set them in a `.env` file next to
 `compose.yml`.
 
-`queue/`, `ingested/`, and `state/` (the SQLite queue tracking what's been seen/processed, plus the
-Celery Beat schedule file) are gitignored, local-only working directories, bind-mounted into every
-container so containers see the same files as the host.
+`queue/`, `ingested/`, and `state/` (just the Celery Beat schedule file) are gitignored,
+local-only working directories, bind-mounted into every container so containers see the same
+files as the host.
 
 ## How it works
 
@@ -103,10 +103,11 @@ container so containers see the same files as the host.
 ```
 Beat, every minute
   -> tasks.poll_and_enqueue_task            [queue: default]
-       scans queue/, records new arrivals in state/queue.db,
-       fires tasks.dispatch_item_task for every pending row (no waiting on the result)
+       scans queue/, claims each file found by moving it into queue/.processing/ (the move
+       itself is what stops the next tick from re-dispatching a file still being processed),
+       fires tasks.dispatch_item_task for every claimed file (no waiting on the result)
 
-tasks.dispatch_item_task(item_id, uri)      [queue: default]
+tasks.dispatch_item_task(uri)               [queue: default]
   detects the file's MIME type and classifies it as pdf / xlsx / markitdown / unsupported,
   then chains the matching ingest task -> tasks.finalize_task and fires it off
 
@@ -114,8 +115,9 @@ tasks.ingest_pdf_task / ingest_markitdown_task / ingest_xlsx_task / mark_unsuppo
   [queue: pdf-ingest / markitdown-ingest / xlsx-ingest / default respectively]
   does the actual conversion + chunking (or DuckDB extraction), writes metadata/status.json
 
-tasks.finalize_task(outcome, item_id, uri)  [queue: default]
-  records success/failed in state/queue.db and removes the file from queue/
+tasks.finalize_task(outcome, uri)           [queue: default]
+  removes the claimed file from queue/.processing/ - success/failure is already durably
+  recorded in that document's ingested/<doc>/status.json
 ```
 
 Each document's full pipeline (convert + chunk, or the xlsx extract) runs as a single task rather
@@ -170,5 +172,5 @@ state (what's pending, what succeeded/failed and why), while `Flower` (its own c
 ## TODO
 
 - Dedupe queued documents by content hash instead of file path, so a corrected file dropped
-  back into `queue/` under the same name is picked up as new work instead of being silently
-  ignored (see `queue_db.enqueue` / `tasks.poll_and_enqueue_task`).
+  back into `queue/` under the same name while an earlier copy is still being processed doesn't
+  collide with it in `queue/.processing/` (see `tasks.poll_and_enqueue_task`).
