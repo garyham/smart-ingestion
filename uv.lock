@@ -2965,15 +2965,11 @@ dependencies = [
     { name = "duckdb" },
     { name = "filetype" },
     { name = "langchain-text-splitters" },
+    { name = "litellm" },
     { name = "markitdown", extra = ["docx"] },
     { name = "prefect" },
     { name = "pymupdf" },
     { name = "pymupdf4llm" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "litellm" },
 ]
 
 [package.metadata]
@@ -2981,14 +2977,12 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.5.5" },
     { name = "filetype", specifier = ">=1.2.0" },
     { name = "langchain-text-splitters", specifier = ">=0.3.0" },
+    { name = "litellm", specifier = ">=1.94.0" },
     { name = "markitdown", extras = ["docx"], specifier = ">=0.1.1" },
     { name = "prefect", specifier = ">=3.8.0" },
     { name = "pymupdf", specifier = ">=1.24.0" },
     { name = "pymupdf4llm", specifier = ">=0.0.17" },
 ]
-
-[package.metadata.requires-dev]
-dev = [{ name = "litellm", specifier = ">=1.94.0" }]
 
 [[package]]
 name = "sniffio"
