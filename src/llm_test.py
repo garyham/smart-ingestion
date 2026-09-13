@@ -6,9 +6,9 @@ surfaced an ingested xlsx document: given its `metadata`, build a schema-aware
 system prompt and a `query_dataset` tool bound to that document's `.duckdb` file,
 then let the model answer a question via litellm tool-calling.
 
-Usage (from the repo root, so relative `ingested/` paths resolve):
-    uv run ask "How many vessels were in service in 2023?"
-    uv run ask "..." --doc UK_armed_forces_equipment_and_formations_2025
+Usage:
+    uv run ask "How many vessels were in service in 2023?" \
+      --manifest s3://smart-files/ingested/<document-id>/<ingestion-id>/manifest.json
     uv run ask "..." --model anthropic/claude-sonnet-5  # default is gpt-4.1
 """
 
@@ -16,12 +16,15 @@ import argparse
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 import duckdb
 import litellm
 
-DEFAULT_DOC = "UK_armed_forces_equipment_and_formations_2025"
+from upload_events import s3_client
+
 DEFAULT_MODEL = os.environ.get("LLM_TEST_MODEL", "gpt-4.1")
 MAX_ROWS = 200
 MAX_TOOL_ROUNDS = 6
@@ -52,7 +55,26 @@ QUERY_TOOL_SCHEMA = {
 
 
 def load_metadata(doc_dir: Path) -> dict:
-    return json.loads((doc_dir / "metadata").read_text())
+    return json.loads((doc_dir / "metadata.json").read_text())
+
+
+def download_bundle(manifest_uri: str, destination: Path) -> None:
+    parsed = urlparse(manifest_uri)
+    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path.lstrip("/"):
+        raise ValueError("manifest must be an s3:// URI")
+
+    client = s3_client()
+    manifest = json.loads(
+        client.get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))["Body"].read()
+    )
+    for artifact in manifest["artifacts"]:
+        name = Path(artifact["name"])
+        if name.is_absolute() or ".." in name.parts:
+            raise ValueError("manifest contains an unsafe artifact name")
+        artifact_uri = urlparse(artifact["uri"])
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        client.download_file(artifact_uri.netloc, artifact_uri.path.lstrip("/"), str(target))
 
 
 def format_schema_prompt(metadata: dict) -> str:
@@ -133,13 +155,15 @@ def run(question: str, doc_dir: Path, model: str) -> str:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("question")
-    parser.add_argument("--doc", default=DEFAULT_DOC, help="ingested/<doc> folder name")
+    parser.add_argument("--manifest", required=True, help="s3:// URI from ingestion.completed")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="litellm model string")
     args = parser.parse_args()
 
-    doc_dir = Path("ingested") / args.doc
-    answer = run(args.question, doc_dir, args.model)
-    print(answer)
+    with tempfile.TemporaryDirectory(prefix="smart-files-query-") as temp_dir:
+        doc_dir = Path(temp_dir)
+        download_bundle(args.manifest, doc_dir)
+        answer = run(args.question, doc_dir, args.model)
+        print(answer)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Smart Files</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+      }
+
+      body {
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        place-items: center;
+      }
+
+      main {
+        width: min(32rem, calc(100% - 2rem));
+      }
+
+      form {
+        display: grid;
+        gap: 1rem;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        padding: 0.6rem 1rem;
+      }
+
+      #status {
+        min-height: 1.5rem;
+      }
+
+      nav ul {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem 1.25rem;
+        padding-left: 1.25rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Upload a file</h1>
+      <form id="upload-form">
+        <input id="file" name="file" type="file" required>
+        <button type="submit">Upload</button>
+      </form>
+      <p id="status" role="status" aria-live="polite"></p>
+
+      <nav aria-labelledby="observability-heading">
+        <h2 id="observability-heading">Observability</h2>
+        <ul>
+          <li><a href="http://127.0.0.1:4200" target="_blank" rel="noopener noreferrer">Prefect</a></li>
+          <li><a href="http://127.0.0.1:15673" target="_blank" rel="noopener noreferrer">RabbitMQ</a></li>
+          <li><a href="http://127.0.0.1:9333" target="_blank" rel="noopener noreferrer">SeaweedFS master</a></li>
+          <li><a href="http://127.0.0.1:8888" target="_blank" rel="noopener noreferrer">SeaweedFS filer</a></li>
+        </ul>
+      </nav>
+    </main>
+
+    <script>
+      const form = document.querySelector("#upload-form");
+      const fileInput = document.querySelector("#file");
+      const status = document.querySelector("#status");
+      const button = form.querySelector("button");
+
+      async function readJson(response) {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.detail || `Request failed (${response.status})`);
+        }
+        return body;
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const file = fileInput.files[0];
+        if (!file) return;
+
+        const contentType = file.type || "application/octet-stream";
+        const details = {
+          filename: file.name,
+          content_type: contentType,
+          size: file.size,
+        };
+
+        button.disabled = true;
+        status.textContent = "Creating upload URL…";
+
+        try {
+          const presignResponse = await fetch("/presign", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(details),
+          });
+          const presign = await readJson(presignResponse);
+
+          status.textContent = "Uploading…";
+          const uploadResponse = await fetch(presign.upload_url, {
+            method: "PUT",
+            headers: {"Content-Type": contentType},
+            body: file,
+          });
+          if (!uploadResponse.ok) {
+            throw new Error(`Upload failed (${uploadResponse.status})`);
+          }
+
+          status.textContent = "Sending notification…";
+          const notifyResponse = await fetch("/notify", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              ...details,
+              object_key: presign.object_key,
+              document_id: presign.document_id,
+            }),
+          });
+          await readJson(notifyResponse);
+
+          form.reset();
+          status.textContent = "Upload complete.";
+        } catch (error) {
+          status.textContent = error.message;
+        } finally {
+          button.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

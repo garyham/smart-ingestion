@@ -1,8 +1,8 @@
 # smart-files
 
-A proof-of-concept document ingestion pipeline: drop source documents into `queue/`, a Prefect
-deployment polls on a cron schedule and ingests new arrivals into `ingested/` (metadata, chunks,
-and for `.xlsx` a queryable DuckDB database).
+A proof-of-concept document ingestion pipeline. Files are uploaded to SeaweedFS and RabbitMQ
+notifies the ingestion worker. Prefect stores workflow state in PostgreSQL. The worker stores
+artifact bundles in SeaweedFS and publishes completion events through RabbitMQ.
 
 ## Installation
 
@@ -18,38 +18,99 @@ langchain_text_splitters, etc.) into a local `.venv`.
 
 ## Operation
 
-Ingestion needs a running Prefect server (it backs the poller's cron schedule) and the poller
-itself, in two separate terminals:
+Start all services from the project root:
 
 ```bash
-# terminal 1: start the Prefect server
-./prefect_server start
-
-# terminal 2: start the poller - watches queue/ and ingests new arrivals into ingested/
-uv run poll
+docker compose up -d --build --wait
 ```
 
-With both running, drop a document into `queue/` and it's picked up on the next poll (every
-minute):
+Open `http://127.0.0.1:8000` and select a file.
+
+Use these commands to view service status and logs:
 
 ```bash
-cp data/UK_armed_forces_equipment_and_formations_2025.xlsx queue/
-# a minute or so later:
-ls ingested/UK_armed_forces_equipment_and_formations_2025/
-# assets/  metadata  status.json  UK_armed_forces_equipment_and_formations_2025.duckdb
+docker compose ps
+docker compose logs -f api ingest prefect
 ```
 
-A PDF or Word doc ingests the same way, but is chunked instead of turned into a DuckDB database:
+The upload process is:
 
-```bash
-cp data/Armed_Forces_Covenant_annual_report_summary_2025.pdf queue/
-# a minute or so later:
-ls ingested/Armed_Forces_Covenant_annual_report_summary_2025/
-# assets/  chunks.jsonl  metadata  status.json
+1. The API creates a signed SeaweedFS upload URL.
+2. The browser uploads the file directly to SeaweedFS.
+3. The API publishes a `file.uploaded` event to the `file-uploads` RabbitMQ exchange.
+4. RabbitMQ puts the event in the durable `file-ingestion` queue.
+5. The worker downloads the file from SeaweedFS and runs the ingestion flow.
+6. The worker uploads an immutable artifact bundle to SeaweedFS.
+7. It uploads `manifest.json` last and publishes an `ingestion.completed` event.
+
+The worker acknowledges a message after successful ingestion. It requeues an ingestion error and
+rejects an invalid event.
+
+### Service endpoints
+
+| Service | Address | Notes |
+|---|---|---|
+| Upload page and API | `http://127.0.0.1:8000` | Upload files here |
+| Prefect | `http://127.0.0.1:4200` | Flow runs and logs |
+| PostgreSQL | `127.0.0.1:5433` | Prefect database; `prefect` / `prefect` |
+| RabbitMQ management | `http://127.0.0.1:15673` | `smart_files` / `smart_files` |
+| SeaweedFS S3 API | `http://127.0.0.1:8333` | Used by the API and worker |
+
+### Downstream interface
+
+Each upload creates this object-store bundle:
+
+```text
+ingested/<document-id>/<ingestion-id>/
+  assets/       # copy of the source file
+  metadata.json # extracted metadata
+  status.json   # ok, needs_intervention, or failed
+  chunks.jsonl  # chunked text, when applicable
+  *.duckdb      # spreadsheet database, when applicable
+  manifest.json # artifact list, hashes, source, and outcome; uploaded last
 ```
 
-Check `status.json` in a document's output folder for the ingestion outcome (`ok`,
-`needs_intervention`, or `failed`) and, on failure, why.
+The durable `file-processing` queue receives a persistent event after the manifest is stored:
+
+```json
+{
+  "event": "ingestion.completed",
+  "schema_version": 1,
+  "document_id": "uuid",
+  "ingestion_id": "uuid",
+  "status": "ok",
+  "artifact_type": "chunks",
+  "manifest_uri": "s3://smart-files/ingested/<document-id>/<ingestion-id>/manifest.json",
+  "completed_at": "2026-09-13T12:00:00+00:00"
+}
+```
+
+Consumers must acknowledge messages only after processing. They must deduplicate by
+`ingestion_id`, because RabbitMQ delivery is at least once. Events are also emitted for
+`failed` and `needs_intervention` outcomes.
+
+### Configuration
+
+Docker Compose uses these environment variables:
+
+| Variable | Default |
+|---|---|
+| `S3_ACCESS_KEY_ID` | `smart_files` |
+| `S3_SECRET_ACCESS_KEY` | `smart_files_secret` |
+| `S3_BUCKET` | `smart-files` |
+| `POSTGRES_DB` | `prefect` |
+| `POSTGRES_USER` | `prefect` |
+| `POSTGRES_PASSWORD` | `prefect` |
+| `RABBITMQ_DEFAULT_USER` | `smart_files` |
+| `RABBITMQ_DEFAULT_PASS` | `smart_files` |
+| `UPLOAD_EXCHANGE` | `file-uploads` |
+| `INGEST_QUEUE` | `file-ingestion` |
+| `COMPLETION_EXCHANGE` | `ingestion-results` |
+| `PROCESS_QUEUE` | `file-processing` |
+| `ARTIFACT_PREFIX` | `ingested` |
+
+The PostgreSQL data is stored in the `postgres_data` Docker volume. Existing data in
+`~/.prefect/prefect.db` is not migrated or used by the Compose services.
 
 ### Supported document types
 
@@ -70,27 +131,15 @@ Anything outside this whitelist (`config/config.yaml`) is routed straight to a `
 | Plain text        | `text/plain`                                                                                                    | markitdown    | chunked                |
 | Email             | `message/rfc822`                                                                                                | markitdown    | chunked                |
 
-Spreadsheet types (Excel/ODS) are ingested into a `.duckdb` file under
-`ingested/<doc_name>/` and queried with SQL downstream instead of being split into chunks.
+Spreadsheet types (Excel/ODS) are stored as a `.duckdb` artifact and queried with SQL downstream
+instead of being split into chunks.
 
 Other useful commands:
 
 ```bash
-# stop the poller: Ctrl-C in its terminal
+# stop all services
+docker compose down
 
-# stop the Prefect server
-./prefect_server stop
-
-# wipe all flow run history from the Prefect server (useful when its UI/DB gets cluttered
-# during development)
+# remove all Prefect flow-run history while the services are running
 uv run clean-runs
 ```
-
-`queue/` and `state/` (the poller's SQLite queue tracking what's been seen/processed) are
-gitignored, local-only working directories.
-
-## TODO
-
-- Dedupe queued documents by content hash instead of file path, so a corrected file dropped
-  back into `queue/` under the same name is picked up as new work instead of being silently
-  ignored (see `queue_db.enqueue_new` / `poll_ingest.scan_queue_dir`).

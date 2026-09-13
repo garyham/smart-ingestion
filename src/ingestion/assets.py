@@ -17,4 +17,4 @@ def write_status(doc_dir: Path, status: dict) -> None:
 
 def write_metadata(doc_dir: Path, metadata: dict) -> None:
     """Write extracted metadata for a document, for later vectorization/search."""
-    (doc_dir / "metadata").write_text(json.dumps(metadata, indent=2, default=str))
+    (doc_dir / "metadata.json").write_text(json.dumps(metadata, indent=2, default=str))
