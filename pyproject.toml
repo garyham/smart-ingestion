@@ -31,3 +31,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 sources = ["src"]
 include = ["src/api.py", "src/static", "src/upload_events.py", "src/poll_ingest.py", "src/clean_runs.py", "src/llm_test.py", "src/ingestion"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
