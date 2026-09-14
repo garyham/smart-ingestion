@@ -137,6 +137,9 @@ instead of being split into chunks.
 Other useful commands:
 
 ```bash
+# upload files from data/, publish 100 notifications, wait, then remove the source objects
+uv run load-test --count 100
+
 # stop all services
 docker compose down
 

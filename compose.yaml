@@ -108,6 +108,8 @@ services:
   ingest:
     build: .
     command: ["ingest"]
+    deploy:
+      replicas: 4
     environment:
       PREFECT_API_URL: http://prefect:4200/api
       S3_ENDPOINT_URL: http://seaweedfs:8333
