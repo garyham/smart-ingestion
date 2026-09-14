@@ -61,9 +61,17 @@ services:
 
   api:
     build: .
-    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
-    volumes:
-      - ./src/static:/app/src/static:ro
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]
+    develop:
+      watch:
+        - action: sync
+          path: ./src
+          target: /app/src
+          initial_sync: true
+        - action: rebuild
+          path: ./pyproject.toml
+        - action: rebuild
+          path: ./uv.lock
     environment:
       S3_ENDPOINT_URL: http://127.0.0.1:8333
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
@@ -90,6 +98,20 @@ services:
     command: ["ingest"]
     deploy:
       replicas: 4
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./src
+          target: /app/src
+          initial_sync: true
+        - action: sync+restart
+          path: ./config
+          target: /app/config
+          initial_sync: true
+        - action: rebuild
+          path: ./pyproject.toml
+        - action: rebuild
+          path: ./uv.lock
     environment:
       PREFECT_API_URL: http://prefect:4200/api
       S3_ENDPOINT_URL: http://seaweedfs:8333

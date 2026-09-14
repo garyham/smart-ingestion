@@ -21,8 +21,11 @@ langchain_text_splitters, etc.) into a local `.venv`.
 Start all services from the project root:
 
 ```bash
-docker compose up -d --build --wait
+docker compose up --build --watch
 ```
+
+Compose syncs changes under `src/` into the API and workers. Uvicorn reloads the API, and Compose
+restarts the workers. Changes to `pyproject.toml` or `uv.lock` rebuild the affected images.
 
 Open `http://127.0.0.1:8000` and select a file.
 
