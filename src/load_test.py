@@ -1,22 +1,12 @@
 import argparse
-import json
 import mimetypes
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-import pika
-
-from upload_events import (
-    COMPLETION_EXCHANGE,
-    INGEST_QUEUE,
-    RABBITMQ_URL,
-    S3_BUCKET,
-    UPLOAD_EXCHANGE,
-    s3_client,
-    safe_filename,
-)
+from postgres_queue import completed_ingestion_ids, enqueue_upload, ensure_schema
+from upload_events import S3_BUCKET, s3_client, safe_filename
 
 
 def positive_int(value: str) -> int:
@@ -42,23 +32,18 @@ def make_event(path: Path, object_key: str) -> dict[str, str | int]:
     }
 
 
-def wait_for_completions(channel, queue: str, expected: set[str], timeout: float) -> None:
+def wait_for_completions(expected: set[str], timeout: float) -> None:
     deadline = time.monotonic() + timeout
     completed: set[str] = set()
     while completed != expected:
-        method, _properties, body = channel.basic_get(queue=queue, auto_ack=True)
-        if method:
-            event = json.loads(body)
-            ingestion_id = event.get("ingestion_id")
-            if ingestion_id in expected:
-                completed.add(ingestion_id)
-                if len(completed) % 10 == 0 or completed == expected:
-                    print(f"Completed {len(completed)}/{len(expected)}")
-            continue
+        found = completed_ingestion_ids(expected)
+        if found != completed:
+            completed = found
+            print(f"Completed {len(completed)}/{len(expected)}")
         if time.monotonic() >= deadline:
             missing = len(expected - completed)
             raise TimeoutError(f"timed out with {missing} ingestion(s) unfinished")
-        channel.connection.process_data_events(time_limit=1)
+        time.sleep(1)
 
 
 def run(count: int, data_dir: Path, timeout: float) -> None:
@@ -71,8 +56,8 @@ def run(count: int, data_dir: Path, timeout: float) -> None:
         path: f"uploads/load-test/{run_id}/{safe_filename(path.name)}" for path in files
     }
     client = s3_client()
-    connection = None
     try:
+        ensure_schema()
         for path, object_key in object_keys.items():
             content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             client.upload_file(
@@ -83,44 +68,16 @@ def run(count: int, data_dir: Path, timeout: float) -> None:
             )
         print(f"Uploaded {len(files)} source file(s)")
 
-        connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
-        channel = connection.channel()
-        channel.exchange_declare(
-            exchange=UPLOAD_EXCHANGE, exchange_type="fanout", durable=True
-        )
-        channel.queue_declare(queue=INGEST_QUEUE, durable=True)
-        channel.queue_bind(queue=INGEST_QUEUE, exchange=UPLOAD_EXCHANGE)
-        channel.exchange_declare(
-            exchange=COMPLETION_EXCHANGE, exchange_type="fanout", durable=True
-        )
-        result = channel.queue_declare(queue="", exclusive=True, auto_delete=True)
-        completion_queue = result.method.queue
-        channel.queue_bind(queue=completion_queue, exchange=COMPLETION_EXCHANGE)
-        channel.confirm_delivery()
-
         expected: set[str] = set()
         for index in range(count):
             path = files[index % len(files)]
             event = make_event(path, object_keys[path])
             event_id = str(event["event_id"])
-            channel.basic_publish(
-                exchange=UPLOAD_EXCHANGE,
-                routing_key="",
-                body=json.dumps(event).encode(),
-                properties=pika.BasicProperties(
-                    content_type="application/json",
-                    delivery_mode=2,
-                    message_id=event_id,
-                    type="file.uploaded",
-                ),
-                mandatory=True,
-            )
+            enqueue_upload(event)
             expected.add(event_id)
-        print(f"Published {count} notification(s)")
-        wait_for_completions(channel, completion_queue, expected, timeout)
+        print(f"Queued {count} notification(s)")
+        wait_for_completions(expected, timeout)
     finally:
-        if connection is not None and connection.is_open:
-            connection.close()
         client.delete_objects(
             Bucket=S3_BUCKET,
             Delete={"Objects": [{"Key": key} for key in object_keys.values()]},

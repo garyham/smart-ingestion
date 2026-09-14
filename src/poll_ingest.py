@@ -1,79 +1,54 @@
 import json
 import os
+import socket
 import tempfile
 import time
 from pathlib import Path
+from threading import Event, Thread
 from urllib.error import URLError
 from urllib.request import urlopen
-from uuid import UUID
+from uuid import UUID, uuid4
 
 # Prefect reads this setting when it is imported.
 _DEFAULT_PREFECT_API_URL = "http://127.0.0.1:4200/api"
 os.environ.setdefault("PREFECT_API_URL", _DEFAULT_PREFECT_API_URL)
 
-import pika
-from pika.exceptions import AMQPError
 from prefect import flow
+from psycopg import Error as PostgresError
 
 from ingestion.config import load_config
 from ingestion.detect import identify_mime_type
 from ingestion.publish import publish_bundle
 from ingestion.routing import ensure_concurrency_limits, route_document
-from upload_events import (
-    ARTIFACT_PREFIX,
-    COMPLETION_EXCHANGE,
-    INGEST_QUEUE,
-    PROCESS_QUEUE,
-    RABBITMQ_URL,
-    S3_BUCKET,
-    UPLOAD_EXCHANGE,
-    s3_client,
-    safe_filename,
+from postgres_queue import (
+    claim_upload,
+    complete_upload,
+    ensure_schema,
+    extend_upload_lease,
+    fail_upload,
 )
+from upload_events import ARTIFACT_PREFIX, S3_BUCKET, s3_client, safe_filename
 
 _config = load_config()
 _allowed_mime_types = set(_config["mime_types"])
 _concurrency_limits = _config.get("concurrency_limits", {})
+LEASE_SECONDS = int(os.getenv("QUEUE_LEASE_SECONDS", "300"))
+MAX_ATTEMPTS = int(os.getenv("QUEUE_MAX_ATTEMPTS", "5"))
+POLL_SECONDS = float(os.getenv("QUEUE_POLL_SECONDS", "1"))
 
 
 class InvalidUploadEvent(ValueError):
     pass
 
 
-def publish_completion(event: dict) -> None:
-    """Publish a persistent completion event and wait for broker confirmation."""
-    connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
-    try:
-        channel = connection.channel()
-        channel.exchange_declare(
-            exchange=COMPLETION_EXCHANGE,
-            exchange_type="fanout",
-            durable=True,
-        )
-        channel.queue_declare(queue=PROCESS_QUEUE, durable=True)
-        channel.queue_bind(queue=PROCESS_QUEUE, exchange=COMPLETION_EXCHANGE)
-        channel.confirm_delivery()
-        channel.basic_publish(
-            exchange=COMPLETION_EXCHANGE,
-            routing_key="",
-            body=json.dumps(event).encode(),
-            properties=pika.BasicProperties(
-                content_type="application/json",
-                delivery_mode=2,
-                message_id=event["ingestion_id"],
-                type=event["event"],
-            ),
-            mandatory=True,
-        )
-    finally:
-        connection.close()
-
-
-def parse_upload_event(body: bytes) -> dict:
-    try:
-        event = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise InvalidUploadEvent("message body is not valid JSON") from exc
+def parse_upload_event(value: bytes | dict) -> dict:
+    if isinstance(value, bytes):
+        try:
+            event = json.loads(value)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise InvalidUploadEvent("message body is not valid JSON") from exc
+    else:
+        event = value
 
     if not isinstance(event, dict) or event.get("event") != "file.uploaded":
         raise InvalidUploadEvent("message is not a file.uploaded event")
@@ -91,7 +66,7 @@ def parse_upload_event(body: bytes) -> dict:
 
 
 @flow(name="ingest-upload")
-def ingest_upload(event: dict) -> None:
+def ingest_upload(event: dict) -> dict:
     filename = safe_filename(event["filename"])
     with tempfile.TemporaryDirectory(prefix="smart-files-") as temp_dir:
         work_dir = Path(temp_dir)
@@ -104,7 +79,7 @@ def ingest_upload(event: dict) -> None:
         doc_dir = output_root / doc.stem
         if not (doc_dir / "status.json").exists():
             raise RuntimeError("no status.json was written")
-        completion = publish_bundle(
+        return publish_bundle(
             client,
             S3_BUCKET,
             ARTIFACT_PREFIX,
@@ -113,49 +88,60 @@ def ingest_upload(event: dict) -> None:
             event,
             doc_dir,
         )
-        publish_completion(completion)
 
 
-def handle_message(channel, method, _properties, body: bytes) -> None:
+class LeaseHeartbeat:
+    def __init__(self, job_id: UUID, worker_id: str):
+        self.job_id = job_id
+        self.worker_id = worker_id
+        self.stop = Event()
+        self.thread = Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        while not self.stop.wait(max(1, LEASE_SECONDS // 3)):
+            try:
+                if not extend_upload_lease(self.job_id, self.worker_id, LEASE_SECONDS):
+                    return
+            except PostgresError as exc:
+                print(f"Could not extend lease for {self.job_id}: {exc}")
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, _type, _value, _traceback):
+        self.stop.set()
+        self.thread.join()
+
+
+def process_job(job: dict, worker_id: str) -> None:
+    job_id = job["id"]
     try:
-        event = parse_upload_event(body)
+        event = parse_upload_event(job["event"])
     except InvalidUploadEvent as exc:
         print(f"Rejecting invalid upload event: {exc}")
-        channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+        fail_upload(job_id, worker_id, str(exc), MAX_ATTEMPTS, MAX_ATTEMPTS)
         return
 
     try:
-        ingest_upload(event)
+        with LeaseHeartbeat(job_id, worker_id):
+            completion = ingest_upload(event)
+        if not complete_upload(job_id, worker_id, completion):
+            print(f"Lost lease before completing {event['object_key']}")
     except Exception as exc:  # noqa: BLE001 - failed work must remain queued
         print(f"Ingestion failed for {event['object_key']}: {exc}")
-        channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-        return
-
-    channel.basic_ack(delivery_tag=method.delivery_tag)
+        fail_upload(job_id, worker_id, str(exc), job["attempts"], MAX_ATTEMPTS)
 
 
 def consume_uploads() -> None:
-    connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
-    try:
-        channel = connection.channel()
-        channel.exchange_declare(
-            exchange=UPLOAD_EXCHANGE,
-            exchange_type="fanout",
-            durable=True,
-        )
-        channel.queue_declare(queue=INGEST_QUEUE, durable=True)
-        channel.queue_bind(queue=INGEST_QUEUE, exchange=UPLOAD_EXCHANGE)
-        channel.basic_qos(prefetch_count=1)
-        channel.basic_consume(
-            queue=INGEST_QUEUE,
-            on_message_callback=handle_message,
-            auto_ack=False,
-        )
-        print(f"Waiting for uploads on {UPLOAD_EXCHANGE} ({INGEST_QUEUE})")
-        channel.start_consuming()
-    finally:
-        if connection.is_open:
-            connection.close()
+    worker_id = f"{socket.gethostname()}:{os.getpid()}:{uuid4()}"
+    print("Waiting for uploads in PostgreSQL")
+    while True:
+        job = claim_upload(worker_id, LEASE_SECONDS)
+        if job is None:
+            time.sleep(POLL_SECONDS)
+            continue
+        process_job(job, worker_id)
 
 
 def _require_prefect_server() -> None:
@@ -173,12 +159,13 @@ def _require_prefect_server() -> None:
 
 def main() -> None:
     _require_prefect_server()
+    ensure_schema()
     ensure_concurrency_limits(_concurrency_limits)
     while True:
         try:
             consume_uploads()
-        except (AMQPError, OSError) as exc:
-            print(f"RabbitMQ connection failed: {exc}; retrying in 5 seconds")
+        except (PostgresError, OSError) as exc:
+            print(f"PostgreSQL connection failed: {exc}; retrying in 5 seconds")
             time.sleep(5)
 
 

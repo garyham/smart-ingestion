@@ -1,8 +1,8 @@
 # smart-files
 
-A proof-of-concept document ingestion pipeline. Files are uploaded to SeaweedFS and RabbitMQ
-notifies the ingestion worker. Prefect stores workflow state in PostgreSQL. The worker stores
-artifact bundles in SeaweedFS and publishes completion events through RabbitMQ.
+A proof-of-concept document ingestion pipeline. Files are uploaded to SeaweedFS and queued for
+ingestion in PostgreSQL. Prefect stores workflow state in PostgreSQL. The worker stores artifact
+bundles in SeaweedFS and writes completion events to a PostgreSQL outbox.
 
 ## Installation
 
@@ -37,14 +37,14 @@ The upload process is:
 
 1. The API creates a signed SeaweedFS upload URL.
 2. The browser uploads the file directly to SeaweedFS.
-3. The API publishes a `file.uploaded` event to the `file-uploads` RabbitMQ exchange.
-4. RabbitMQ puts the event in the durable `file-ingestion` queue.
+3. The API inserts a `file.uploaded` job into PostgreSQL.
+4. A worker claims the job with `FOR UPDATE SKIP LOCKED` and a renewable lease.
 5. The worker downloads the file from SeaweedFS and runs the ingestion flow.
 6. The worker uploads an immutable artifact bundle to SeaweedFS.
-7. It uploads `manifest.json` last and publishes an `ingestion.completed` event.
+7. It uploads `manifest.json` last and writes an `ingestion.completed` outbox event.
 
-The worker acknowledges a message after successful ingestion. It requeues an ingestion error and
-rejects an invalid event.
+The worker completes a job after successful ingestion. It retries an ingestion error with a delay
+and marks invalid or exhausted jobs as failed. See [PostgreSQL queues](docs/postgres-queues.md).
 
 ### Service endpoints
 
@@ -52,8 +52,7 @@ rejects an invalid event.
 |---|---|---|
 | Upload page and API | `http://127.0.0.1:8000` | Upload files here |
 | Prefect | `http://127.0.0.1:4200` | Flow runs and logs |
-| PostgreSQL | `127.0.0.1:5433` | Prefect database; `prefect` / `prefect` |
-| RabbitMQ management | `http://127.0.0.1:15673` | `smart_files` / `smart_files` |
+| PostgreSQL | `127.0.0.1:5433` | Prefect and `smart_files` schemas; `prefect` / `prefect` |
 | SeaweedFS S3 API | `http://127.0.0.1:8333` | Used by the API and worker |
 
 ### Downstream interface
@@ -70,7 +69,7 @@ ingested/<document-id>/<ingestion-id>/
   manifest.json # artifact list, hashes, source, and outcome; uploaded last
 ```
 
-The durable `file-processing` queue receives a persistent event after the manifest is stored:
+The durable `smart_files.outbox` table receives an event after the manifest is stored:
 
 ```json
 {
@@ -85,9 +84,9 @@ The durable `file-processing` queue receives a persistent event after the manife
 }
 ```
 
-Consumers must acknowledge messages only after processing. They must deduplicate by
-`ingestion_id`, because RabbitMQ delivery is at least once. Events are also emitted for
-`failed` and `needs_intervention` outcomes.
+Consumers must mark rows as processed only after successful work. They must deduplicate by
+`ingestion_id`, because delivery is at least once. Events are also written for `failed` and
+`needs_intervention` outcomes.
 
 ### Configuration
 
@@ -101,12 +100,10 @@ Docker Compose uses these environment variables:
 | `POSTGRES_DB` | `prefect` |
 | `POSTGRES_USER` | `prefect` |
 | `POSTGRES_PASSWORD` | `prefect` |
-| `RABBITMQ_DEFAULT_USER` | `smart_files` |
-| `RABBITMQ_DEFAULT_PASS` | `smart_files` |
-| `UPLOAD_EXCHANGE` | `file-uploads` |
-| `INGEST_QUEUE` | `file-ingestion` |
-| `COMPLETION_EXCHANGE` | `ingestion-results` |
-| `PROCESS_QUEUE` | `file-processing` |
+| `DATABASE_URL` | `postgresql://prefect:prefect@127.0.0.1:5433/prefect` |
+| `QUEUE_LEASE_SECONDS` | `300` |
+| `QUEUE_MAX_ATTEMPTS` | `5` |
+| `QUEUE_POLL_SECONDS` | `1` |
 | `ARTIFACT_PREFIX` | `ingested` |
 
 The PostgreSQL data is stored in the `postgres_data` Docker volume. Existing data in
@@ -137,7 +134,7 @@ instead of being split into chunks.
 Other useful commands:
 
 ```bash
-# upload files from data/, publish 100 notifications, wait, then remove the source objects
+# upload files from data/, queue 100 jobs, wait, then remove the source objects
 uv run load-test --count 100
 
 # stop all services

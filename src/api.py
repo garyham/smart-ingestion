@@ -1,29 +1,29 @@
-import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
-import pika
 import uvicorn
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import FileResponse
-from pika.exceptions import AMQPError
+from psycopg import Error as PostgresError
 from pydantic import BaseModel, Field
 
-from upload_events import (
-    INGEST_QUEUE,
-    RABBITMQ_URL,
-    S3_BUCKET,
-    UPLOAD_EXCHANGE,
-    s3_client,
-    safe_filename,
-)
+from postgres_queue import enqueue_upload, ensure_schema
+from upload_events import S3_BUCKET, s3_client, safe_filename
 
 PRESIGN_TTL_SECONDS = 15 * 60
 INDEX_PATH = Path(__file__).with_name("static") / "index.html"
 
-app = FastAPI(title="Smart Files")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    ensure_schema()
+    yield
+
+
+app = FastAPI(title="Smart Files", lifespan=lifespan)
 
 
 class FileDetails(BaseModel):
@@ -35,34 +35,6 @@ class FileDetails(BaseModel):
 class NotifyRequest(FileDetails):
     object_key: str = Field(min_length=1, max_length=1024)
     document_id: UUID
-
-
-def publish_upload(event: dict[str, str | int]) -> None:
-    connection = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
-    try:
-        channel = connection.channel()
-        channel.exchange_declare(
-            exchange=UPLOAD_EXCHANGE,
-            exchange_type="fanout",
-            durable=True,
-        )
-        channel.queue_declare(queue=INGEST_QUEUE, durable=True)
-        channel.queue_bind(queue=INGEST_QUEUE, exchange=UPLOAD_EXCHANGE)
-        channel.confirm_delivery()
-        channel.basic_publish(
-            exchange=UPLOAD_EXCHANGE,
-            routing_key="",
-            body=json.dumps(event).encode(),
-            properties=pika.BasicProperties(
-                content_type="application/json",
-                delivery_mode=2,
-                message_id=str(event["event_id"]),
-                type=str(event["event"]),
-            ),
-            mandatory=True,
-        )
-    finally:
-        connection.close()
 
 
 @app.get("/", response_class=FileResponse)
@@ -125,15 +97,16 @@ def notify(file: NotifyRequest) -> dict[str, str]:
     }
 
     try:
-        publish_upload(event)
-    except (AMQPError, OSError) as error:
+        enqueue_upload(event)
+    except (PostgresError, OSError) as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Could not publish the upload notification",
+            detail="Could not queue the upload",
         ) from error
 
     return {"status": "notified", "event_id": event_id}
 
 
 def main() -> None:
+    ensure_schema()
     uvicorn.run("api:app", host="127.0.0.1", port=8000)

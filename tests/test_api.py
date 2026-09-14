@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from api import FileDetails, NotifyRequest, UPLOAD_EXCHANGE, notify, presign, safe_filename
+from api import FileDetails, NotifyRequest, notify, presign, safe_filename
 
 
 class FakeS3Client:
@@ -16,9 +16,6 @@ class FakeS3Client:
 
 
 class ApiTests(unittest.TestCase):
-    def test_upload_exchange_name(self):
-        self.assertEqual(UPLOAD_EXCHANGE, "file-uploads")
-
     def test_safe_filename_removes_paths_and_unsafe_characters(self):
         self.assertEqual(safe_filename("../folder/my file.txt"), "my_file.txt")
         self.assertEqual(safe_filename(r"C:\folder\report.pdf"), "report.pdf")
@@ -34,8 +31,8 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(response["document_id"])
         self.assertIn("?signed=yes", str(response["upload_url"]))
 
-    @patch("api.publish_upload")
-    def test_notify_publishes_file_event(self, publish):
+    @patch("api.enqueue_upload")
+    def test_notify_queues_file_event(self, enqueue):
         response = notify(
             NotifyRequest(
                 filename="notes.txt",
@@ -47,7 +44,7 @@ class ApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response["status"], "notified")
-        event = publish.call_args.args[0]
+        event = enqueue.call_args.args[0]
         self.assertEqual(event["event"], "file.uploaded")
         self.assertEqual(event["schema_version"], 1)
         self.assertEqual(event["document_id"], "c63752f4-8d18-4da2-a107-24c52d0707cc")
@@ -56,8 +53,8 @@ class ApiTests(unittest.TestCase):
             "uploads/c63752f4-8d18-4da2-a107-24c52d0707cc/notes.txt",
         )
 
-    @patch("api.publish_upload")
-    def test_notify_rejects_a_mismatched_document_id(self, publish):
+    @patch("api.enqueue_upload")
+    def test_notify_rejects_a_mismatched_document_id(self, enqueue):
         with self.assertRaises(HTTPException):
             notify(
                 NotifyRequest(
@@ -68,7 +65,7 @@ class ApiTests(unittest.TestCase):
                     object_key="uploads/a59966fb-c923-41d9-aa88-f088dca07a98/notes.txt",
                 )
             )
-        publish.assert_not_called()
+        enqueue.assert_not_called()
 
 
 if __name__ == "__main__":

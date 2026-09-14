@@ -59,24 +59,6 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  rabbitmq:
-    image: rabbitmq:4.3.5-management
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-smart_files}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-smart_files}
-    ports:
-      - "127.0.0.1:5673:5672"
-      - "127.0.0.1:15673:15672"
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-    restart: unless-stopped
-
   api:
     build: .
     command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -87,15 +69,13 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
       S3_BUCKET: ${S3_BUCKET:-smart-files}
-      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-smart_files}:${RABBITMQ_DEFAULT_PASS:-smart_files}@rabbitmq:5672/%2F
-      UPLOAD_EXCHANGE: ${UPLOAD_EXCHANGE:-file-uploads}
-      INGEST_QUEUE: ${INGEST_QUEUE:-file-ingestion}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
       seaweedfs:
         condition: service_healthy
-      rabbitmq:
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://localhost:8000/health', timeout=2)"]
@@ -116,22 +96,20 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
       S3_BUCKET: ${S3_BUCKET:-smart-files}
-      RABBITMQ_URL: amqp://${RABBITMQ_DEFAULT_USER:-smart_files}:${RABBITMQ_DEFAULT_PASS:-smart_files}@rabbitmq:5672/%2F
-      UPLOAD_EXCHANGE: ${UPLOAD_EXCHANGE:-file-uploads}
-      INGEST_QUEUE: ${INGEST_QUEUE:-file-ingestion}
-      COMPLETION_EXCHANGE: ${COMPLETION_EXCHANGE:-ingestion-results}
-      PROCESS_QUEUE: ${PROCESS_QUEUE:-file-processing}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      QUEUE_LEASE_SECONDS: ${QUEUE_LEASE_SECONDS:-300}
+      QUEUE_MAX_ATTEMPTS: ${QUEUE_MAX_ATTEMPTS:-5}
+      QUEUE_POLL_SECONDS: ${QUEUE_POLL_SECONDS:-1}
       ARTIFACT_PREFIX: ${ARTIFACT_PREFIX:-ingested}
     depends_on:
       prefect:
         condition: service_healthy
       seaweedfs:
         condition: service_healthy
-      rabbitmq:
+      postgres:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
   postgres_data:
   seaweedfs_data:
-  rabbitmq_data:

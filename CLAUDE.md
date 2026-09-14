@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 `smart-files` is a proof-of-concept **document ingestion pipeline**. Source documents are uploaded
-to SeaweedFS. RabbitMQ notifies the worker, which downloads and ingests each new file. Structured
+to SeaweedFS. PostgreSQL queues work for the worker, which downloads and ingests each new file. Structured
 output is stored as immutable SeaweedFS/S3 bundles, using:
 
 - **Prefect** for workflow orchestration (tasks/flows), with state stored in PostgreSQL.
@@ -46,8 +46,8 @@ ingested/<document_id>/<ingestion_id>/
   manifest.json # uploaded last as the bundle completion marker
 ```
 
-After the manifest is stored, the worker publishes `ingestion.completed` to the durable
-`file-processing` RabbitMQ queue. Consumers fetch the bundle through its `manifest_uri` and
+After the manifest is stored, the worker writes `ingestion.completed` to the durable
+`smart_files.outbox` table. Consumers fetch the bundle through its `manifest_uri` and
 deduplicate retries by `ingestion_id`.
 
 Test/sample input documents live in `data/`.
@@ -64,10 +64,10 @@ ingestion doesn't fully succeed, so the failure is inspectable rather than silen
 ## Current state of the code
 
 The pipeline is implemented as a `src/` package. `src/poll_ingest.py` consumes the durable
-`file-ingestion` queue, which is bound to the `file-uploads` fanout exchange. It validates each
+`smart_files.ingestion_jobs` queue. It validates each
 event, downloads the object from SeaweedFS, and routes it through the correct ingestion subflow.
-It acknowledges work after the bundle and completion event are published, rejects invalid events,
-and requeues infrastructure or unhandled errors. Prefect
+It completes work after the bundle and completion event are stored, rejects invalid events,
+and retries infrastructure or unhandled errors. Prefect
 global concurrency limits are configured in `config/config.yaml`. The per-concern logic lives
 under `src/ingestion/`:
 
@@ -106,7 +106,7 @@ This project uses `uv` for dependency management (Python >=3.12, deps pinned in 
 # install dependencies
 uv sync
 
-# build and start PostgreSQL, SeaweedFS, RabbitMQ, Prefect, the API, and the worker
+# build and start PostgreSQL, SeaweedFS, Prefect, the API, and the worker
 docker compose up -d --build --wait
 
 # stop all services

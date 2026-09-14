@@ -9,13 +9,6 @@ S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "http://127.0.0.1:8333")
 S3_ACCESS_KEY_ID = os.getenv("S3_ACCESS_KEY_ID", "smart_files")
 S3_SECRET_ACCESS_KEY = os.getenv("S3_SECRET_ACCESS_KEY", "smart_files_secret")
 S3_BUCKET = os.getenv("S3_BUCKET", "smart-files")
-RABBITMQ_URL = os.getenv(
-    "RABBITMQ_URL", "amqp://smart_files:smart_files@127.0.0.1:5673/%2F"
-)
-UPLOAD_EXCHANGE = os.getenv("UPLOAD_EXCHANGE", "file-uploads")
-INGEST_QUEUE = os.getenv("INGEST_QUEUE", "file-ingestion")
-COMPLETION_EXCHANGE = os.getenv("COMPLETION_EXCHANGE", "ingestion-results")
-PROCESS_QUEUE = os.getenv("PROCESS_QUEUE", "file-processing")
 ARTIFACT_PREFIX = os.getenv("ARTIFACT_PREFIX", "ingested").strip("/")
 
 
