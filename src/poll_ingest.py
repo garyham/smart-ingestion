@@ -12,6 +12,7 @@ _DEFAULT_PREFECT_API_URL = "http://127.0.0.1:4200/api"
 os.environ.setdefault("PREFECT_API_URL", _DEFAULT_PREFECT_API_URL)
 
 import pika
+from pika.exceptions import AMQPError
 from prefect import flow
 
 from ingestion.config import load_config
@@ -176,7 +177,7 @@ def main() -> None:
     while True:
         try:
             consume_uploads()
-        except (pika.exceptions.AMQPError, OSError) as exc:
+        except (AMQPError, OSError) as exc:
             print(f"RabbitMQ connection failed: {exc}; retrying in 5 seconds")
             time.sleep(5)
 

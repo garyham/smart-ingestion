@@ -8,6 +8,7 @@ import uvicorn
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import FileResponse
+from pika.exceptions import AMQPError
 from pydantic import BaseModel, Field
 
 from upload_events import (
@@ -125,7 +126,7 @@ def notify(file: NotifyRequest) -> dict[str, str]:
 
     try:
         publish_upload(event)
-    except (pika.exceptions.AMQPError, OSError) as error:
+    except (AMQPError, OSError) as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not publish the upload notification",
