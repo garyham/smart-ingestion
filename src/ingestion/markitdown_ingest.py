@@ -11,7 +11,9 @@ _markitdown = MarkItDown()
 
 
 @task
-def convert_with_markitdown(doc: Path, detected: DetectedType, output_root: Path) -> str | None:
+def convert_with_markitdown(
+    doc: Path, detected: DetectedType, output_root: Path
+) -> str | None:
     """Convert a document to markdown via markitdown. Writes assets/metadata, and on failure the
     final status too. Returns the markdown text, or None on failure.
     """
@@ -24,7 +26,11 @@ def convert_with_markitdown(doc: Path, detected: DetectedType, output_root: Path
     except Exception as e:
         write_status(
             doc_dir,
-            {"status": "failed", "reason": "markitdown_conversion_failed", "detail": str(e)},
+            {
+                "status": "failed",
+                "reason": "markitdown_conversion_failed",
+                "detail": str(e),
+            },
         )
         return None
 
@@ -41,7 +47,9 @@ def convert_with_markitdown(doc: Path, detected: DetectedType, output_root: Path
 
 
 @flow(name="ingest-other-document")
-def markitdown_ingest_flow(doc: Path, detected: DetectedType, output_root: Path) -> None:
+def markitdown_ingest_flow(
+    doc: Path, detected: DetectedType, output_root: Path
+) -> None:
     """Subflow for the markitdown ingestion path: convert via markitdown, then chunk."""
     markdown = convert_with_markitdown(doc, detected, output_root)
     chunk_and_finalize(doc, output_root, markdown)

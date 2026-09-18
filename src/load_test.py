@@ -59,7 +59,9 @@ def run(count: int, data_dir: Path, timeout: float) -> None:
     try:
         ensure_schema()
         for path, object_key in object_keys.items():
-            content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            content_type = (
+                mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            )
             client.upload_file(
                 str(path),
                 S3_BUCKET,

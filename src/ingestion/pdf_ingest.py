@@ -22,7 +22,8 @@ def convert_pdf(doc: Path, detected: DetectedType, output_root: Path) -> str | N
         markdown = pymupdf4llm.to_markdown(doc)
     except Exception as e:
         write_status(
-            doc_dir, {"status": "failed", "reason": "pdf_conversion_failed", "detail": str(e)}
+            doc_dir,
+            {"status": "failed", "reason": "pdf_conversion_failed", "detail": str(e)},
         )
         return None
 

@@ -46,7 +46,9 @@ async def _clear_flow_runs() -> None:
                     await client.delete_flow_run(run_id)
                 except Exception as exc:
                     failed.add(run_id)
-            print(f"  pass {pass_num}: deleted {len(remaining) - len(failed)}, {len(failed)} remaining")
+            print(
+                f"  pass {pass_num}: deleted {len(remaining) - len(failed)}, {len(failed)} remaining"
+            )
 
             if failed == remaining:
                 print(f"Stopped: {len(failed)} flow run(s) could not be deleted:")

@@ -22,7 +22,8 @@ def xlsx_ingest_flow(doc: Path, detected: DetectedType, output_root: Path) -> No
         result = xlsx.extract_metadata(doc, db_path)
     except Exception as e:
         write_status(
-            doc_dir, {"status": "failed", "reason": "xlsx_ingestion_error", "detail": str(e)}
+            doc_dir,
+            {"status": "failed", "reason": "xlsx_ingestion_error", "detail": str(e)},
         )
         return
 

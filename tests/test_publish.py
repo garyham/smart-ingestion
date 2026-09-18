@@ -46,11 +46,16 @@ class PublishBundleTests(unittest.TestCase):
         self.assertEqual(len(client.uploads), 3)
         manifest_object = client.objects[0]
         manifest = json.loads(manifest_object["Body"])
-        self.assertEqual(manifest_object["Key"], "ingested/document-id/ingestion-id/manifest.json")
+        self.assertEqual(
+            manifest_object["Key"], "ingested/document-id/ingestion-id/manifest.json"
+        )
         self.assertEqual(manifest["artifact_type"], "chunks")
         self.assertEqual(len(manifest["artifacts"]), 3)
         self.assertEqual(event["status"], "ok")
-        self.assertEqual(event["manifest_uri"], "s3://smart-files/ingested/document-id/ingestion-id/manifest.json")
+        self.assertEqual(
+            event["manifest_uri"],
+            "s3://smart-files/ingested/document-id/ingestion-id/manifest.json",
+        )
 
 
 if __name__ == "__main__":

@@ -25,7 +25,9 @@ def slugify(text: str) -> str:
 
 
 def get_layers(con: duckdb.DuckDBPyConnection, path: str) -> list[str]:
-    rows = con.execute("SELECT unnest(layers).name FROM st_read_meta(?)", [path]).fetchall()
+    rows = con.execute(
+        "SELECT unnest(layers).name FROM st_read_meta(?)", [path]
+    ).fetchall()
     return [r[0] for r in rows]
 
 
@@ -33,7 +35,9 @@ def parse_contents_titles(con: duckdb.DuckDBPyConnection, path: str) -> dict[str
     """Map sheet number (as string) -> title, parsed from the Contents sheet."""
     titles: dict[str, str] = {}
     try:
-        rows = con.execute("SELECT Field1 FROM st_read(?, layer='Contents')", [path]).fetchall()
+        rows = con.execute(
+            "SELECT Field1 FROM st_read(?, layer='Contents')", [path]
+        ).fetchall()
     except duckdb.Error:
         return titles
     pattern = re.compile(r"Worksheet\s+(\d+)\s*[–-]\s*(.+)")
@@ -47,7 +51,9 @@ def parse_contents_titles(con: duckdb.DuckDBPyConnection, path: str) -> dict[str
 
 
 def read_sheet_text(con: duckdb.DuckDBPyConnection, path: str, layer: str) -> str:
-    rows = con.execute("SELECT Field1 FROM st_read(?, layer=?)", [path, layer]).fetchall()
+    rows = con.execute(
+        "SELECT Field1 FROM st_read(?, layer=?)", [path, layer]
+    ).fetchall()
     return "\n".join(r[0] for r in rows if r[0])
 
 
@@ -132,7 +138,7 @@ def ingest_sheet(
     con.executemany(f'INSERT INTO "{table_name}" VALUES ({placeholders})', cast_rows)
 
     safe_title = title.replace("'", "''")
-    con.execute(f'COMMENT ON TABLE "{table_name}" IS \'{safe_title}\'')
+    con.execute(f"COMMENT ON TABLE \"{table_name}\" IS '{safe_title}'")
     for c, h in zip(columns, header_row[:n_cols]):
         if h:
             safe_h = h.replace("'", "''")
@@ -140,7 +146,9 @@ def ingest_sheet(
     return True
 
 
-def load_workbook(path: Path, db_path: str | Path = ":memory:") -> tuple[duckdb.DuckDBPyConnection, dict]:
+def load_workbook(
+    path: Path, db_path: str | Path = ":memory:"
+) -> tuple[duckdb.DuckDBPyConnection, dict]:
     """Wrap the workbook in a DuckDB connection, one table per numbered sheet.
 
     `db_path` defaults to an ephemeral in-memory database; pass a file path to
@@ -180,7 +188,11 @@ def load_workbook(path: Path, db_path: str | Path = ":memory:") -> tuple[duckdb.
 
 
 def compute_column_stats(
-    con: duckdb.DuckDBPyConnection, table_name: str, column: str, dtype: str, original_name: str | None
+    con: duckdb.DuckDBPyConnection,
+    table_name: str,
+    column: str,
+    dtype: str,
+    original_name: str | None,
 ) -> dict:
     """Run a fixed set of standard summary queries for one column.
 
@@ -225,12 +237,17 @@ def compute_column_stats(
     }
 
 
-def compute_table_metadata(con: duckdb.DuckDBPyConnection, table_name: str, title: str) -> dict:
+def compute_table_metadata(
+    con: duckdb.DuckDBPyConnection, table_name: str, title: str
+) -> dict:
     row_count = con.execute(f'SELECT count(*) FROM "{table_name}"').fetchone()[0]
-    columns = con.execute(f'DESCRIBE "{table_name}"').fetchall()  # (name, type, null, key, default, extra)
+    columns = con.execute(
+        f'DESCRIBE "{table_name}"'
+    ).fetchall()  # (name, type, null, key, default, extra)
     comments = dict(
         con.execute(
-            "SELECT column_name, comment FROM duckdb_columns() WHERE table_name = ?", [table_name]
+            "SELECT column_name, comment FROM duckdb_columns() WHERE table_name = ?",
+            [table_name],
         ).fetchall()
     )
     return {
@@ -252,7 +269,10 @@ def extract_metadata(path: Path, db_path: str | Path = ":memory:") -> dict:
     """
     con, meta = load_workbook(path, db_path)
     try:
-        tables = [compute_table_metadata(con, name, title) for name, title in meta["tables"].items()]
+        tables = [
+            compute_table_metadata(con, name, title)
+            for name, title in meta["tables"].items()
+        ]
     finally:
         con.close()
 

@@ -34,7 +34,9 @@ def ensure_concurrency_limits(limits: dict[str, int]) -> None:
     """
     with get_client(sync_client=True) as client:
         for key, limit in limits.items():
-            client.upsert_global_concurrency_limit_by_name(_CONCURRENCY_LIMIT_NAMES[key], limit)
+            client.upsert_global_concurrency_limit_by_name(
+                _CONCURRENCY_LIMIT_NAMES[key], limit
+            )
 
 
 @task
@@ -50,7 +52,9 @@ def mark_unsupported(doc: Path, detected: DetectedType, output_root: Path) -> No
             "reason": "unsupported_mime_type",
             "detail": f"MIME type '{detected.mime_type}' is not in the configured whitelist.",
             "mime_type": detected.mime_type,
-            "detected_from": "content" if detected.from_content else "extension fallback",
+            "detected_from": "content"
+            if detected.from_content
+            else "extension fallback",
         },
     )
 

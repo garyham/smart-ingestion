@@ -3,7 +3,12 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from poll_ingest import InvalidUploadEvent, ingest_upload, parse_upload_event, process_job
+from poll_ingest import (
+    InvalidUploadEvent,
+    ingest_upload,
+    parse_upload_event,
+    process_job,
+)
 
 
 EVENT = {
@@ -32,7 +37,9 @@ class PollIngestTests(unittest.TestCase):
 
     @patch("poll_ingest.LeaseHeartbeat")
     @patch("poll_ingest.complete_upload")
-    @patch("poll_ingest.ingest_upload", return_value={"ingestion_id": EVENT["event_id"]})
+    @patch(
+        "poll_ingest.ingest_upload", return_value={"ingestion_id": EVENT["event_id"]}
+    )
     def test_successful_ingestion_completes_job(
         self, ingest_upload, complete_upload, _heartbeat
     ):
@@ -44,7 +51,9 @@ class PollIngestTests(unittest.TestCase):
     @patch("poll_ingest.LeaseHeartbeat")
     @patch("poll_ingest.fail_upload")
     @patch("poll_ingest.ingest_upload", side_effect=RuntimeError("failed"))
-    def test_failed_ingestion_requeues_job(self, _ingest_upload, fail_upload, _heartbeat):
+    def test_failed_ingestion_requeues_job(
+        self, _ingest_upload, fail_upload, _heartbeat
+    ):
         job = {"id": EVENT["event_id"], "event": EVENT, "attempts": 1}
         process_job(job, "worker-1")
         fail_upload.assert_called_once()

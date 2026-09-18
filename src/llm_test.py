@@ -46,7 +46,10 @@ QUERY_TOOL_SCHEMA = {
         "parameters": {
             "type": "object",
             "properties": {
-                "sql": {"type": "string", "description": "A DuckDB SQL SELECT statement."},
+                "sql": {
+                    "type": "string",
+                    "description": "A DuckDB SQL SELECT statement.",
+                },
             },
             "required": ["sql"],
         },
@@ -65,7 +68,9 @@ def download_bundle(manifest_uri: str, destination: Path) -> None:
 
     client = s3_client()
     manifest = json.loads(
-        client.get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))["Body"].read()
+        client.get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))[
+            "Body"
+        ].read()
     )
     for artifact in manifest["artifacts"]:
         name = Path(artifact["name"])
@@ -74,7 +79,9 @@ def download_bundle(manifest_uri: str, destination: Path) -> None:
         artifact_uri = urlparse(artifact["uri"])
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        client.download_file(artifact_uri.netloc, artifact_uri.path.lstrip("/"), str(target))
+        client.download_file(
+            artifact_uri.netloc, artifact_uri.path.lstrip("/"), str(target)
+        )
 
 
 def format_schema_prompt(metadata: dict) -> str:
@@ -83,7 +90,9 @@ def format_schema_prompt(metadata: dict) -> str:
         lines.append(metadata["background"])
 
     for table in metadata["tables"]:
-        lines.append(f'\nTable "{table["table_name"]}" ({table["title"]}), {table["row_count"]} rows:')
+        lines.append(
+            f'\nTable "{table["table_name"]}" ({table["title"]}), {table["row_count"]} rows:'
+        )
         for col in table["columns"]:
             desc = f"  - {col['name']} ({col['type']})"
             if col.get("original_name") and col["original_name"] != col["name"]:
@@ -134,7 +143,9 @@ def run(question: str, doc_dir: Path, model: str) -> str:
     ]
 
     for _ in range(MAX_TOOL_ROUNDS):
-        response = litellm.completion(model=model, messages=messages, tools=[QUERY_TOOL_SCHEMA])
+        response = litellm.completion(
+            model=model, messages=messages, tools=[QUERY_TOOL_SCHEMA]
+        )
         message = response.choices[0].message
         messages.append(message.model_dump())
 
@@ -155,7 +166,9 @@ def run(question: str, doc_dir: Path, model: str) -> str:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("question")
-    parser.add_argument("--manifest", required=True, help="s3:// URI from ingestion.completed")
+    parser.add_argument(
+        "--manifest", required=True, help="s3:// URI from ingestion.completed"
+    )
     parser.add_argument("--model", default=DEFAULT_MODEL, help="litellm model string")
     args = parser.parse_args()
 
