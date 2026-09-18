@@ -67,17 +67,17 @@ def route_document(
     print(f"{doc.name}: {detected.mime_type} ({source})")
 
     if detected.mime_type not in allowed_mime_types:
-        print(f"  route: unsupported -> failed")
+        print("  route: unsupported -> failed")
         mark_unsupported(doc, detected, output_root)
     elif detected.mime_type in _XLSX_MIME_TYPES:
-        print(f"  route: xlsx -> DuckDB metadata extraction")
+        print("  route: xlsx -> DuckDB metadata extraction")
         with concurrency(_CONCURRENCY_LIMIT_NAMES["xlsx"], strict=True):
             xlsx_ingest_flow(doc, detected, output_root)
     elif detected.mime_type in _PDF_MIME_TYPES:
-        print(f"  route: pdf -> pymupdf4llm + chunking")
+        print("  route: pdf -> pymupdf4llm + chunking")
         with concurrency(_CONCURRENCY_LIMIT_NAMES["pdf"], strict=True):
             pdf_ingest_flow(doc, detected, output_root)
     else:
-        print(f"  route: markitdown + chunking")
+        print("  route: markitdown + chunking")
         with concurrency(_CONCURRENCY_LIMIT_NAMES["markitdown"], strict=True):
             markitdown_ingest_flow(doc, detected, output_root)

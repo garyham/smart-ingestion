@@ -1,8 +1,9 @@
 # smart-files
 
 A proof-of-concept document ingestion pipeline. Files are uploaded to SeaweedFS and queued for
-ingestion in PostgreSQL. Prefect stores workflow state in PostgreSQL. The worker stores artifact
-bundles in SeaweedFS and writes completion events to a PostgreSQL outbox.
+ingestion in PostgreSQL. Prefect stores workflow state in PostgreSQL. The ingestion worker stores
+artifact bundles in SeaweedFS. An embedding worker generates dense and sparse vectors and stores
+them in PostgreSQL with pgvector.
 
 ## Installation
 
@@ -45,6 +46,8 @@ The upload process is:
 5. The worker downloads the file from SeaweedFS and runs the ingestion flow.
 6. The worker uploads an immutable artifact bundle to SeaweedFS.
 7. It uploads `manifest.json` last and writes an `ingestion.completed` outbox event.
+8. The embedding worker generates dense and sparse vectors in parallel.
+9. It writes both vector types in one PostgreSQL transaction.
 
 The worker completes a job after successful ingestion. It retries an ingestion error with a delay
 and marks invalid or exhausted jobs as failed. See [PostgreSQL queues](docs/postgres-queues.md).
@@ -54,8 +57,9 @@ and marks invalid or exhausted jobs as failed. See [PostgreSQL queues](docs/post
 | Service | Address | Notes |
 |---|---|---|
 | Upload page and API | `http://127.0.0.1:8000` | Upload files here |
+| Hybrid chunk search | `http://127.0.0.1:8000/query` | Search dense and sparse embeddings |
 | Prefect | `http://127.0.0.1:4200` | Flow runs and logs |
-| PostgreSQL | `127.0.0.1:5433` | Prefect and `smart_files` schemas; `prefect` / `prefect` |
+| PostgreSQL | `127.0.0.1:5433` | Prefect, queue, and pgvector data; `prefect` / `prefect` |
 | SeaweedFS S3 API | `http://127.0.0.1:8333` | Used by the API and worker |
 
 ### Downstream interface
@@ -108,6 +112,16 @@ Docker Compose uses these environment variables:
 | `QUEUE_MAX_ATTEMPTS` | `5` |
 | `QUEUE_POLL_SECONDS` | `1` |
 | `ARTIFACT_PREFIX` | `ingested` |
+| `DENSE_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` |
+| `SPARSE_EMBEDDING_MODEL` | `Qdrant/bm42-all-minilm-l6-v2-attentions` |
+| `EMBEDDING_DEVICE` | `auto` |
+| `EMBEDDING_LEASE_SECONDS` | `900` |
+| `EMBEDDING_MAX_ATTEMPTS` | `5` |
+| `EMBEDDING_POLL_SECONDS` | `1` |
+
+The standard image installs CPU FastEmbed. A GPU deployment must replace it with
+`fastembed-gpu` and include compatible NVIDIA CUDA and cuDNN libraries. With
+`EMBEDDING_DEVICE=auto`, the worker uses CUDA when ONNX Runtime exposes it and otherwise uses CPU.
 
 The PostgreSQL data is stored in the `postgres_data` Docker volume. Existing data in
 `~/.prefect/prefect.db` is not migrated or used by the Compose services.

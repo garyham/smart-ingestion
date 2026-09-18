@@ -44,7 +44,7 @@ async def _clear_flow_runs() -> None:
             for run_id in remaining:
                 try:
                     await client.delete_flow_run(run_id)
-                except Exception as exc:
+                except Exception:
                     failed.add(run_id)
             print(
                 f"  pass {pass_num}: deleted {len(remaining) - len(failed)}, {len(failed)} remaining"

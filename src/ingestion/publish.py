@@ -4,7 +4,6 @@ import mimetypes
 from datetime import UTC, datetime
 from pathlib import Path
 
-
 SCHEMA_VERSION = 1
 _CONTENT_TYPES = {
     ".json": "application/json",

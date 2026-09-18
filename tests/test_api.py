@@ -3,7 +3,15 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from api import FileDetails, NotifyRequest, notify, presign, safe_filename
+from api import (
+    FileDetails,
+    NotifyRequest,
+    QueryRequest,
+    notify,
+    presign,
+    query_chunks,
+    safe_filename,
+)
 
 
 class FakeS3Client:
@@ -66,6 +74,20 @@ class ApiTests(unittest.TestCase):
                 )
             )
         enqueue.assert_not_called()
+
+    @patch("api.hybrid_search")
+    @patch("api.generate_query_embeddings", return_value=([0.1], {"indices": []}))
+    @patch("api.available_embedding_providers", return_value=("CPUExecutionProvider",))
+    @patch("api.configured_models", return_value=("dense", "sparse", "cpu"))
+    def test_query_combines_dense_and_sparse_results(
+        self, _models, _providers, _generate, search
+    ):
+        search.return_value = [{"content": "matching chunk"}]
+
+        response = query_chunks(QueryRequest(query="test query"))
+
+        self.assertEqual(response["results"][0]["content"], "matching chunk")
+        search.assert_called_once_with([0.1], {"indices": []}, "dense", "sparse", 3)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,6 @@ import re
 import boto3
 from botocore.client import Config
 
-
 S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "http://127.0.0.1:8333")
 S3_ACCESS_KEY_ID = os.getenv("S3_ACCESS_KEY_ID", "smart_files")
 S3_SECRET_ACCESS_KEY = os.getenv("S3_SECRET_ACCESS_KEY", "smart_files_secret")

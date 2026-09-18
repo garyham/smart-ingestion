@@ -1,6 +1,6 @@
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from poll_ingest import (
@@ -9,7 +9,6 @@ from poll_ingest import (
     parse_upload_event,
     process_job,
 )
-
 
 EVENT = {
     "event_id": "38e00553-d6cc-4bf7-9293-27bb86563c36",

@@ -1,7 +1,7 @@
 import argparse
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from load_test import make_event, positive_int
 

@@ -10,11 +10,18 @@ from fastapi.responses import FileResponse
 from psycopg import Error as PostgresError
 from pydantic import BaseModel, Field
 
+from embeddings.flow import (
+    available_embedding_providers,
+    configured_models,
+    generate_query_embeddings,
+)
+from embeddings.storage import hybrid_search
 from postgres_queue import enqueue_upload, ensure_schema
 from upload_events import S3_BUCKET, s3_client, safe_filename
 
 PRESIGN_TTL_SECONDS = 15 * 60
 INDEX_PATH = Path(__file__).with_name("static") / "index.html"
+QUERY_PATH = Path(__file__).with_name("static") / "query.html"
 
 
 @asynccontextmanager
@@ -37,9 +44,19 @@ class NotifyRequest(FileDetails):
     document_id: UUID
 
 
+class QueryRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    limit: int = Field(default=3, ge=1, le=3)
+
+
 @app.get("/", response_class=FileResponse)
 def index() -> Path:
     return INDEX_PATH
+
+
+@app.get("/query", response_class=FileResponse)
+def query_page() -> Path:
+    return QUERY_PATH
 
 
 @app.get("/health")
@@ -105,6 +122,23 @@ def notify(file: NotifyRequest) -> dict[str, str]:
         ) from error
 
     return {"status": "notified", "event_id": event_id}
+
+
+@app.post("/query")
+def query_chunks(request: QueryRequest) -> dict[str, list[dict]]:
+    dense_model, sparse_model, device = configured_models()
+    try:
+        providers = available_embedding_providers(device)
+        dense, sparse = generate_query_embeddings(
+            request.query, dense_model, sparse_model, providers
+        )
+        results = hybrid_search(dense, sparse, dense_model, sparse_model, request.limit)
+    except (PostgresError, OSError, RuntimeError, ValueError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not search the indexed chunks",
+        ) from error
+    return {"results": results}
 
 
 def main() -> None:

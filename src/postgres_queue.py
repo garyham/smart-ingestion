@@ -7,7 +7,6 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://prefect:prefect@127.0.0.1:5433/prefect"
 )
@@ -179,6 +178,99 @@ def fail_upload(
                 error[:4000],
                 job_id,
                 worker_id,
+            ),
+        )
+
+
+def claim_outbox(
+    topic: str, consumer_id: str, lease_seconds: int
+) -> dict[str, Any] | None:
+    with connect() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            WITH next_event AS (
+                SELECT id
+                FROM {QUEUE_SCHEMA}.outbox
+                WHERE topic = %s
+                  AND available_at <= now()
+                  AND (
+                    status = 'pending'
+                    OR (status = 'processing' AND locked_until < now())
+                  )
+                ORDER BY created_at
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            UPDATE {QUEUE_SCHEMA}.outbox AS event
+            SET status = 'processing',
+                attempts = attempts + 1,
+                locked_until = now() + (%s * interval '1 second'),
+                consumer_id = %s,
+                last_error = NULL
+            FROM next_event
+            WHERE event.id = next_event.id
+            RETURNING event.id, event.event, event.attempts
+            """,
+            (topic, lease_seconds, consumer_id),
+        )
+        return cursor.fetchone()
+
+
+def extend_outbox_lease(
+    event_id: UUID, consumer_id: str, lease_seconds: int
+) -> bool:
+    with connect() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            UPDATE {QUEUE_SCHEMA}.outbox
+            SET locked_until = now() + (%s * interval '1 second')
+            WHERE id = %s AND status = 'processing' AND consumer_id = %s
+            """,
+            (lease_seconds, event_id, consumer_id),
+        )
+        return cursor.rowcount == 1
+
+
+def complete_outbox(event_id: UUID, consumer_id: str) -> bool:
+    with connect() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            UPDATE {QUEUE_SCHEMA}.outbox
+            SET status = 'processed', processed_at = now(),
+                locked_until = NULL, consumer_id = NULL
+            WHERE id = %s AND status = 'processing' AND consumer_id = %s
+            """,
+            (event_id, consumer_id),
+        )
+        return cursor.rowcount == 1
+
+
+def fail_outbox(
+    event_id: UUID,
+    consumer_id: str,
+    error: str,
+    attempts: int,
+    max_attempts: int,
+) -> None:
+    failed = attempts >= max_attempts
+    delay = min(300, 2 ** min(attempts, 8))
+    with connect() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            UPDATE {QUEUE_SCHEMA}.outbox
+            SET status = %s,
+                available_at = now() + %s,
+                locked_until = NULL,
+                consumer_id = NULL,
+                last_error = %s
+            WHERE id = %s AND status = 'processing' AND consumer_id = %s
+            """,
+            (
+                "failed" if failed else "pending",
+                timedelta(seconds=delay),
+                error[:4000],
+                event_id,
+                consumer_id,
             ),
         )
 
