@@ -59,6 +59,18 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  tika:
+    image: apache/tika:4.0.0
+    ports:
+      - "127.0.0.1:9998:9998"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9998"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+
   api:
     build: .
     command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/src"]
@@ -126,12 +138,16 @@ services:
       QUEUE_MAX_ATTEMPTS: ${QUEUE_MAX_ATTEMPTS:-5}
       QUEUE_POLL_SECONDS: ${QUEUE_POLL_SECONDS:-1}
       ARTIFACT_PREFIX: ${ARTIFACT_PREFIX:-ingested}
+      TIKA_URL: http://tika:9998
+      TIKA_TIMEOUT_SECONDS: ${TIKA_TIMEOUT_SECONDS:-120}
     depends_on:
       prefect:
         condition: service_healthy
       seaweedfs:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      tika:
         condition: service_healthy
     restart: unless-stopped
 

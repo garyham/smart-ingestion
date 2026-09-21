@@ -4,11 +4,11 @@ from prefect import flow
 
 from ingestion import xlsx
 from ingestion.assets import copy_to_assets, write_metadata, write_status
-from ingestion.detect import DetectedType
+from ingestion.tika import TikaDocument, document_metadata
 
 
 @flow(name="ingest-xlsx")
-def xlsx_ingest_flow(doc: Path, detected: DetectedType, output_root: Path) -> None:
+def xlsx_ingest_flow(doc: Path, tika: TikaDocument, output_root: Path) -> None:
     """Subflow for the xlsx ingestion path: ingest into a queryable DuckDB database and
     extract its metadata via DuckDB standard queries. Not chunked, per CLAUDE.md.
     """
@@ -20,7 +20,7 @@ def xlsx_ingest_flow(doc: Path, detected: DetectedType, output_root: Path) -> No
 
     try:
         result = xlsx.extract_metadata(doc, db_path)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - ingestion errors are valid outcomes
         write_status(
             doc_dir,
             {"status": "failed", "reason": "xlsx_ingestion_error", "detail": str(e)},
@@ -28,8 +28,7 @@ def xlsx_ingest_flow(doc: Path, detected: DetectedType, output_root: Path) -> No
         return
 
     metadata = {
-        "title": doc.stem,
-        "mime_type": detected.mime_type,
+        **document_metadata(doc, tika),
         "kind": "queryable_dataset",
         "query_engine": "duckdb",
         "duckdb_file": db_path.name,

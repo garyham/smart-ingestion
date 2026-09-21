@@ -9,9 +9,8 @@ to SeaweedFS. PostgreSQL queues work for the worker, which downloads and ingests
 output is stored as immutable SeaweedFS/S3 bundles, using:
 
 - **Prefect** for workflow orchestration (tasks/flows), with state stored in PostgreSQL.
-- **pymupdf4llm** to convert PDFs to markdown, and **markitdown** to convert other document types
-  (Word/ODT, HTML, CSV, plain text, email) to markdown.
-- **langchain_text_splitters** to chunk the converted markdown for onward use by an LLM.
+- **Apache Tika Server** to detect MIME types and extract metadata and plain text.
+- **langchain_text_splitters** to chunk the extracted text for onward use by an LLM.
 
 What happens to the ingested output afterwards (retrieval, chat, vectorization/search) is **out of
 scope** for this project — it only produces the ingested artifacts.
@@ -71,19 +70,15 @@ and retries infrastructure or unhandled errors. Prefect
 global concurrency limits are configured in `config/config.yaml`. The per-concern logic lives
 under `src/ingestion/`:
 
-- `src/ingestion/config.py` — loads `config/config.yaml` (MIME whitelist).
-- `src/ingestion/detect.py` — MIME detection (`DetectedType`, `identify_mime_type`).
+- `src/ingestion/config.py` — loads concurrency limits from `config/config.yaml`.
+- `src/ingestion/tika.py` — Tika client, MIME detection, text extraction, and common metadata.
 - `src/ingestion/routing.py` — `route_document`, dispatching a detected document to the right
-  ingestion subflow (pdf/markitdown/xlsx) or marking it unsupported; shared by `poll_ingest.py`.
+  ingestion subflow (Tika or xlsx); shared by `poll_ingest.py`.
 - `src/ingestion/assets.py` — shared staging helpers (`copy_to_assets`, `write_status`,
   `write_metadata`) used by every ingestion path.
 - `src/ingestion/publish.py` — uploads artifacts, calculates hashes, and writes the manifest last.
-- `src/ingestion/pdf_ingest.py` — converts PDFs to markdown via pymupdf4llm (`convert_pdf`), writing
-  assets/metadata, then chunks; `pdf_ingest_flow` is the subflow wrapping the two steps.
-- `src/ingestion/markitdown_ingest.py` — converts other non-xlsx document types to markdown via
-  markitdown (`convert_with_markitdown`), writing assets/metadata, then chunks;
-  `markitdown_ingest_flow` is the subflow wrapping the two steps.
-- `src/ingestion/chunking.py` — shared chunking step (`chunk_and_finalize`): splits converted markdown
+- `src/ingestion/tika_ingest.py` — stores Tika output and chunks extracted text.
+- `src/ingestion/chunking.py` — shared chunking step (`chunk_and_finalize`): splits extracted text
   via `langchain_text_splitters` (header-aware split, then size-capped) and writes `chunks.jsonl` +
   the final `status.json` for non-xlsx types.
 - `src/ingestion/xlsx.py` — pure DuckDB library for xlsx ingestion (no Prefect dependency): locates
@@ -123,7 +118,7 @@ There is no lint/test/build tooling configured yet.
 - Ingestion is the full scope of this project — do not build in downstream consumption (chat,
   retrieval, vector search) as part of this pipeline.
 - `.xlsx` documents are ingested as a queryable DuckDB database, not chunked; other document types are
-  converted to markdown (pymupdf4llm for PDF, markitdown for everything else) and chunked via
+  converted to plain text by Apache Tika and chunked via
   `langchain_text_splitters`.
 - Every document type still gets metadata extraction and raw-file storage under `assets/`, regardless
   of whether it's chunked or exposed as a DuckDB node.

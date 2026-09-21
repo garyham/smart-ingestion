@@ -22,24 +22,24 @@ _size_splitter = RecursiveCharacterTextSplitter(
 
 
 @task
-def chunk_and_finalize(doc: Path, output_root: Path, markdown: str | None) -> None:
-    """Split a converted document's markdown via langchain_text_splitters and write chunks.jsonl
-    plus the final status. If `markdown` is None, the conversion step already failed and wrote
+def chunk_and_finalize(doc: Path, output_root: Path, text: str | None) -> None:
+    """Split extracted text via langchain_text_splitters and write chunks.jsonl
+    plus the final status. If `text` is None, the conversion step already failed and wrote
     its own status, so this is a no-op.
     """
-    if markdown is None:
+    if text is None:
         return
 
     doc_dir = output_root / doc.stem
 
-    if not markdown.strip():
+    if not text.strip():
         write_status(
             doc_dir, {"status": "needs_intervention", "reason": "no_content_extracted"}
         )
         return
 
     chunks = []
-    for section in _header_splitter.split_text(markdown):
+    for section in _header_splitter.split_text(text):
         headings = [v for v in section.metadata.values() if v]
         for piece in _size_splitter.split_text(section.page_content):
             chunks.append({"index": len(chunks), "headings": headings, "text": piece})

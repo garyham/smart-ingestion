@@ -64,14 +64,12 @@ class PollIngestTests(unittest.TestCase):
         fail_upload.assert_called_once()
 
     @patch("poll_ingest.route_document")
-    @patch("poll_ingest.identify_mime_type", return_value=object())
     @patch("poll_ingest.publish_bundle")
     @patch("poll_ingest.s3_client")
     def test_ingest_upload_downloads_from_seaweedfs(
         self,
         make_s3_client,
         publish_bundle,
-        _identify_mime_type,
         route_document,
     ):
         def download_file(bucket, object_key, destination):
@@ -81,7 +79,7 @@ class PollIngestTests(unittest.TestCase):
 
         make_s3_client.return_value.download_file.side_effect = download_file
 
-        def route(doc, _detected, output_root, _allowed):
+        def route(doc, output_root):
             status_dir = output_root / doc.stem
             status_dir.mkdir(parents=True)
             (status_dir / "status.json").write_text('{"status": "ok"}')

@@ -17,7 +17,6 @@ from prefect import flow
 from psycopg import Error as PostgresError
 
 from ingestion.config import load_config
-from ingestion.detect import identify_mime_type
 from ingestion.publish import publish_bundle
 from ingestion.routing import ensure_concurrency_limits, route_document
 from postgres_queue import (
@@ -30,7 +29,6 @@ from postgres_queue import (
 from upload_events import ARTIFACT_PREFIX, S3_BUCKET, s3_client, safe_filename
 
 _config = load_config()
-_allowed_mime_types = set(_config["mime_types"])
 _concurrency_limits = _config.get("concurrency_limits", {})
 LEASE_SECONDS = int(os.getenv("QUEUE_LEASE_SECONDS", "300"))
 MAX_ATTEMPTS = int(os.getenv("QUEUE_MAX_ATTEMPTS", "5"))
@@ -74,8 +72,7 @@ def ingest_upload(event: dict) -> dict:
         output_root = work_dir / "output"
         client = s3_client()
         client.download_file(event["bucket"], event["object_key"], str(doc))
-        detected = identify_mime_type(doc)
-        route_document(doc, detected, output_root, _allowed_mime_types)
+        route_document(doc, output_root)
         doc_dir = output_root / doc.stem
         if not (doc_dir / "status.json").exists():
             raise RuntimeError("no status.json was written")

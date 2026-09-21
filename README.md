@@ -14,7 +14,7 @@ Requires Python >=3.12 and [`uv`](https://docs.astral.sh/uv/).
 uv sync
 ```
 
-This installs the pinned dependencies from `uv.lock` (Prefect, pymupdf4llm, markitdown, duckdb,
+This installs the pinned dependencies from `uv.lock` (Prefect, DuckDB,
 langchain_text_splitters, etc.) into a local `.venv`.
 
 ## Operation
@@ -112,6 +112,8 @@ Docker Compose uses these environment variables:
 | `QUEUE_MAX_ATTEMPTS` | `5` |
 | `QUEUE_POLL_SECONDS` | `1` |
 | `ARTIFACT_PREFIX` | `ingested` |
+| `TIKA_URL` | `http://tika:9998` |
+| `TIKA_TIMEOUT_SECONDS` | `120` |
 | `DENSE_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` |
 | `SPARSE_EMBEDDING_MODEL` | `Qdrant/bm42-all-minilm-l6-v2-attentions` |
 | `EMBEDDING_DEVICE` | `auto` |
@@ -126,24 +128,19 @@ The standard image installs CPU FastEmbed. A GPU deployment must replace it with
 The PostgreSQL data is stored in the `postgres_data` Docker volume. Existing data in
 `~/.prefect/prefect.db` is not migrated or used by the Compose services.
 
-### Supported document types
+### Document handling
 
-Anything outside this whitelist (`config/config.yaml`) is routed straight to a `failed`
-`status.json` rather than being ingested. Every type gets metadata extraction and a raw copy under
-`assets/`, regardless of handling.
+Apache Tika detects the MIME type and extracts metadata and plain text in one parse. The text is
+chunked for downstream use. Every type gets metadata extraction and a raw copy under `assets/`.
 
 | Type              | MIME type(s)                                                                                                 | Converter     | Handling               |
 |-------------------|---------------------------------------------------------------------------------------------------------------|---------------|------------------------|
-| PDF               | `application/pdf`                                                                                              | pymupdf4llm   | chunked                |
-| Word              | `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`                | markitdown    | chunked                |
-| OpenDocument Text | `application/vnd.oasis.opendocument.text`                                                                      | markitdown    | chunked                |
+| PDF               | `application/pdf`                                                                                              | Apache Tika   | chunked                |
+| Word              | `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`                | Apache Tika   | chunked                |
+| OpenDocument Text | `application/vnd.oasis.opendocument.text`                                                                      | Apache Tika   | chunked                |
 | Excel             | `application/vnd.ms-excel`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`                 | -             | DuckDB (not chunked)   |
 | OpenDocument Sheet| `application/vnd.oasis.opendocument.spreadsheet`                                                                | -             | DuckDB (not chunked)   |
-| CSV               | `text/csv`                                                                                                      | markitdown    | chunked                |
-| HTML              | `text/html`                                                                                                     | markitdown    | chunked                |
-| Markdown          | `text/markdown`                                                                                                 | markitdown    | chunked                |
-| Plain text        | `text/plain`                                                                                                    | markitdown    | chunked                |
-| Email             | `message/rfc822`                                                                                                | markitdown    | chunked                |
+| Other Tika formats| varies                                                                                                          | Apache Tika   | chunked                |
 
 Spreadsheet types (Excel/ODS) are stored as a `.duckdb` artifact and queried with SQL downstream
 instead of being split into chunks.
