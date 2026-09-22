@@ -40,7 +40,7 @@ services:
     command:
       - mini
       - -dir=/data
-      - -s3.allowedOrigins=http://localhost:8000,http://127.0.0.1:8000
+      - -s3.allowedOrigins=${WEB_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000,http://0.0.0.0:8000}
     environment:
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
       AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
@@ -85,6 +85,8 @@ services:
         - action: rebuild
           path: ./uv.lock
     environment:
+      PREFECT_API_URL: http://prefect:4200/api
+      PREFECT_RESULTS_LOCAL_STORAGE_PATH: /task-results
       S3_ENDPOINT_URL: http://127.0.0.1:8333
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
@@ -95,7 +97,11 @@ services:
       EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-auto}
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      - prefect_results:/task-results
     depends_on:
+      prefect:
+        condition: service_healthy
       seaweedfs:
         condition: service_healthy
       postgres:
@@ -110,7 +116,7 @@ services:
 
   ingest:
     build: .
-    command: ["ingest"]
+    command: ["ingest-worker"]
     deploy:
       replicas: 4
     develop:
@@ -129,14 +135,11 @@ services:
           path: ./uv.lock
     environment:
       PREFECT_API_URL: http://prefect:4200/api
+      PREFECT_RESULTS_LOCAL_STORAGE_PATH: /task-results
       S3_ENDPOINT_URL: http://seaweedfs:8333
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
       S3_BUCKET: ${S3_BUCKET:-smart-files}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
-      QUEUE_LEASE_SECONDS: ${QUEUE_LEASE_SECONDS:-300}
-      QUEUE_MAX_ATTEMPTS: ${QUEUE_MAX_ATTEMPTS:-5}
-      QUEUE_POLL_SECONDS: ${QUEUE_POLL_SECONDS:-1}
       ARTIFACT_PREFIX: ${ARTIFACT_PREFIX:-ingested}
       TIKA_URL: http://tika:9998
       TIKA_TIMEOUT_SECONDS: ${TIKA_TIMEOUT_SECONDS:-120}
@@ -149,11 +152,13 @@ services:
         condition: service_healthy
       tika:
         condition: service_healthy
+    volumes:
+      - prefect_results:/task-results
     restart: unless-stopped
 
   embed:
     build: .
-    command: ["embed"]
+    command: ["embed-worker"]
     develop:
       watch:
         - action: sync+restart
@@ -166,6 +171,7 @@ services:
           path: ./uv.lock
     environment:
       PREFECT_API_URL: http://prefect:4200/api
+      PREFECT_RESULTS_LOCAL_STORAGE_PATH: /task-results
       S3_ENDPOINT_URL: http://seaweedfs:8333
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
@@ -174,9 +180,6 @@ services:
       DENSE_EMBEDDING_MODEL: ${DENSE_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
       SPARSE_EMBEDDING_MODEL: ${SPARSE_EMBEDDING_MODEL:-Qdrant/bm42-all-minilm-l6-v2-attentions}
       EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-auto}
-      EMBEDDING_LEASE_SECONDS: ${EMBEDDING_LEASE_SECONDS:-900}
-      EMBEDDING_MAX_ATTEMPTS: ${EMBEDDING_MAX_ATTEMPTS:-5}
-      EMBEDDING_POLL_SECONDS: ${EMBEDDING_POLL_SECONDS:-1}
     depends_on:
       prefect:
         condition: service_healthy
@@ -184,8 +187,11 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    volumes:
+      - prefect_results:/task-results
     restart: unless-stopped
 
 volumes:
   postgres_data:
+  prefect_results:
   seaweedfs_data:

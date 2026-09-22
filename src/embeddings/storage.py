@@ -49,6 +49,12 @@ def ensure_embedding_schema(cursor) -> None:
     )
 
 
+def ensure_schema() -> None:
+    with connect() as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(hashtext('smart_files_schema'))")
+        ensure_embedding_schema(cursor)
+
+
 def dense_vector_literal(values: list[float]) -> str:
     return "[" + ",".join(str(float(value)) for value in values) + "]"
 

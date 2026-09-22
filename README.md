@@ -1,9 +1,8 @@
 # smart-files
 
-A proof-of-concept document ingestion pipeline. Files are uploaded to SeaweedFS and queued for
-ingestion in PostgreSQL. Prefect stores workflow state in PostgreSQL. The ingestion worker stores
-artifact bundles in SeaweedFS. An embedding worker generates dense and sparse vectors and stores
-them in PostgreSQL with pgvector.
+A proof-of-concept document ingestion pipeline. Files are uploaded to SeaweedFS and queued as
+Prefect background tasks. Long-lived workers store artifact bundles in SeaweedFS, generate dense
+and sparse vectors, and store them in PostgreSQL with pgvector.
 
 ## Installation
 
@@ -41,16 +40,15 @@ The upload process is:
 
 1. The API creates a signed SeaweedFS upload URL.
 2. The browser uploads the file directly to SeaweedFS.
-3. The API inserts a `file.uploaded` job into PostgreSQL.
-4. A worker claims the job with `FOR UPDATE SKIP LOCKED` and a renewable lease.
-5. The worker downloads the file from SeaweedFS and runs the ingestion flow.
-6. The worker uploads an immutable artifact bundle to SeaweedFS.
-7. It uploads `manifest.json` last and writes an `ingestion.completed` outbox event.
-8. The embedding worker generates dense and sparse vectors in parallel.
-9. It writes both vector types in one PostgreSQL transaction.
+3. The API submits a Prefect `process-upload` background task.
+4. A long-lived ingestion worker downloads the file and runs the ingestion flow.
+5. The worker uploads an immutable artifact bundle and `manifest.json` last.
+6. Successful chunk bundles submit an `embed-document` background task.
+7. The embedding worker generates dense and sparse vectors in parallel.
+8. It writes both vector types in one PostgreSQL transaction.
 
-The worker completes a job after successful ingestion. It retries an ingestion error with a delay
-and marks invalid or exhausted jobs as failed. See [PostgreSQL queues](docs/postgres-queues.md).
+Prefect stores task state, applies ingestion retries, and exposes failures in its UI. The API and
+workers share `prefect_results`, which stores deferred task parameters and results.
 
 ### Service endpoints
 
@@ -59,7 +57,7 @@ and marks invalid or exhausted jobs as failed. See [PostgreSQL queues](docs/post
 | Upload page and API | `http://127.0.0.1:8000` | Upload files here |
 | Hybrid chunk search | `http://127.0.0.1:8000/query` | Search dense and sparse embeddings |
 | Prefect | `http://127.0.0.1:4200` | Flow runs and logs |
-| PostgreSQL | `127.0.0.1:5433` | Prefect, queue, and pgvector data; `prefect` / `prefect` |
+| PostgreSQL | `127.0.0.1:5433` | Prefect and pgvector data; `prefect` / `prefect` |
 | SeaweedFS S3 API | `http://127.0.0.1:8333` | Used by the API and worker |
 
 ### Downstream interface
@@ -76,7 +74,7 @@ ingested/<document-id>/<ingestion-id>/
   manifest.json # artifact list, hashes, source, and outcome; uploaded last
 ```
 
-The durable `smart_files.outbox` table receives an event after the manifest is stored:
+The ingestion task returns this completion value after the manifest is stored:
 
 ```json
 {
@@ -91,9 +89,8 @@ The durable `smart_files.outbox` table receives an event after the manifest is s
 }
 ```
 
-Consumers must mark rows as processed only after successful work. They must deduplicate by
-`ingestion_id`, because delivery is at least once. Events are also written for `failed` and
-`needs_intervention` outcomes.
+The worker submits embedding only when the status is `ok` and the artifact type is `chunks`.
+Immutable bundle paths and embedding upserts make retries safe.
 
 ### Configuration
 
@@ -104,22 +101,18 @@ Docker Compose uses these environment variables:
 | `S3_ACCESS_KEY_ID` | `smart_files` |
 | `S3_SECRET_ACCESS_KEY` | `smart_files_secret` |
 | `S3_BUCKET` | `smart-files` |
+| `WEB_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000,http://0.0.0.0:8000` |
 | `POSTGRES_DB` | `prefect` |
 | `POSTGRES_USER` | `prefect` |
 | `POSTGRES_PASSWORD` | `prefect` |
 | `DATABASE_URL` | `postgresql://prefect:prefect@127.0.0.1:5433/prefect` |
-| `QUEUE_LEASE_SECONDS` | `300` |
-| `QUEUE_MAX_ATTEMPTS` | `5` |
-| `QUEUE_POLL_SECONDS` | `1` |
 | `ARTIFACT_PREFIX` | `ingested` |
 | `TIKA_URL` | `http://tika:9998` |
 | `TIKA_TIMEOUT_SECONDS` | `120` |
 | `DENSE_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` |
 | `SPARSE_EMBEDDING_MODEL` | `Qdrant/bm42-all-minilm-l6-v2-attentions` |
 | `EMBEDDING_DEVICE` | `auto` |
-| `EMBEDDING_LEASE_SECONDS` | `900` |
-| `EMBEDDING_MAX_ATTEMPTS` | `5` |
-| `EMBEDDING_POLL_SECONDS` | `1` |
+| `SMART_FILES_API_URL` | `http://127.0.0.1:8000` |
 
 The standard image installs CPU FastEmbed. A GPU deployment must replace it with
 `fastembed-gpu` and include compatible NVIDIA CUDA and cuDNN libraries. With

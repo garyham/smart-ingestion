@@ -39,8 +39,9 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(response["document_id"])
         self.assertIn("?signed=yes", str(response["upload_url"]))
 
-    @patch("api.enqueue_upload")
-    def test_notify_queues_file_event(self, enqueue):
+    @patch("api.process_upload.delay")
+    def test_notify_queues_file_event(self, delay):
+        delay.return_value.task_run_id = "prefect-task-run"
         response = notify(
             NotifyRequest(
                 filename="notes.txt",
@@ -52,7 +53,7 @@ class ApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response["status"], "notified")
-        event = enqueue.call_args.args[0]
+        event = delay.call_args.args[0]
         self.assertEqual(event["event"], "file.uploaded")
         self.assertEqual(event["schema_version"], 1)
         self.assertEqual(event["document_id"], "c63752f4-8d18-4da2-a107-24c52d0707cc")
@@ -60,9 +61,10 @@ class ApiTests(unittest.TestCase):
             event["object_key"],
             "uploads/c63752f4-8d18-4da2-a107-24c52d0707cc/notes.txt",
         )
+        self.assertEqual(response["task_run_id"], "prefect-task-run")
 
-    @patch("api.enqueue_upload")
-    def test_notify_rejects_a_mismatched_document_id(self, enqueue):
+    @patch("api.process_upload.delay")
+    def test_notify_rejects_a_mismatched_document_id(self, delay):
         with self.assertRaises(HTTPException):
             notify(
                 NotifyRequest(
@@ -73,7 +75,7 @@ class ApiTests(unittest.TestCase):
                     object_key="uploads/a59966fb-c923-41d9-aa88-f088dca07a98/notes.txt",
                 )
             )
-        enqueue.assert_not_called()
+        delay.assert_not_called()
 
     @patch("api.hybrid_search")
     @patch("api.generate_query_embeddings", return_value=([0.1], {"indices": []}))

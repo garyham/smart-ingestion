@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 `smart-files` is a proof-of-concept **document ingestion pipeline**. Source documents are uploaded
-to SeaweedFS. PostgreSQL queues work for the worker, which downloads and ingests each new file. Structured
-output is stored as immutable SeaweedFS/S3 bundles, using:
+to SeaweedFS. Prefect background tasks queue work for long-lived workers. Structured output is
+stored as immutable SeaweedFS/S3 bundles, using:
 
 - **Prefect** for workflow orchestration (tasks/flows), with state stored in PostgreSQL.
 - **Apache Tika Server** to detect MIME types and extract metadata and plain text.
@@ -45,9 +45,8 @@ ingested/<document_id>/<ingestion_id>/
   manifest.json # uploaded last as the bundle completion marker
 ```
 
-After the manifest is stored, the worker writes `ingestion.completed` to the durable
-`smart_files.outbox` table. Consumers fetch the bundle through its `manifest_uri` and
-deduplicate retries by `ingestion_id`.
+After the manifest is stored, the ingestion task submits an embedding background task for a
+successful chunk bundle. Both stages are visible in Prefect.
 
 Test/sample input documents live in `data/`.
 
@@ -62,18 +61,15 @@ ingestion doesn't fully succeed, so the failure is inspectable rather than silen
 
 ## Current state of the code
 
-The pipeline is implemented as a `src/` package. `src/poll_ingest.py` consumes the durable
-`smart_files.ingestion_jobs` queue. It validates each
-event, downloads the object from SeaweedFS, and routes it through the correct ingestion subflow.
-It completes work after the bundle and completion event are stored, rejects invalid events,
-and retries infrastructure or unhandled errors. Prefect
-global concurrency limits are configured in `config/config.yaml`. The per-concern logic lives
-under `src/ingestion/`:
+The pipeline is implemented as a `src/` package. `src/background_tasks.py` defines the ingestion
+and embedding background tasks and their long-lived workers. The API submits ingestion with
+`.delay()`. Prefect handles task state and retries. Global concurrency limits are configured in
+`config/config.yaml`. The per-concern logic lives under `src/ingestion/`:
 
 - `src/ingestion/config.py` — loads concurrency limits from `config/config.yaml`.
 - `src/ingestion/tika.py` — Tika client, MIME detection, text extraction, and common metadata.
 - `src/ingestion/routing.py` — `route_document`, dispatching a detected document to the right
-  ingestion subflow (Tika or xlsx); shared by `poll_ingest.py`.
+  ingestion subflow (Tika or xlsx).
 - `src/ingestion/assets.py` — shared staging helpers (`copy_to_assets`, `write_status`,
   `write_metadata`) used by every ingestion path.
 - `src/ingestion/publish.py` — uploads artifacts, calculates hashes, and writes the manifest last.

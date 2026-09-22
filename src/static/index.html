@@ -125,10 +125,10 @@
               document_id: presign.document_id,
             }),
           });
-          await readJson(notifyResponse);
+          const notification = await readJson(notifyResponse);
 
           form.reset();
-          status.textContent = "Upload complete.";
+          status.textContent = `Upload queued as Prefect task ${notification.task_run_id}.`;
         } catch (error) {
           status.textContent = error.message;
         } finally {

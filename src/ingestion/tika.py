@@ -1,9 +1,8 @@
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.request import Request, urlopen
 
+import httpx
 from prefect import task
 
 TIKA_URL = os.getenv("TIKA_URL", "http://127.0.0.1:9998")
@@ -32,18 +31,18 @@ def _content(record: dict) -> str:
 @task
 def extract_with_tika(path: Path) -> TikaDocument:
     """Detect the MIME type and extract metadata and plain text in one Tika parse."""
-    request = Request(
+    response = httpx.put(
         f"{TIKA_URL.rstrip('/')}/rmeta/text",
-        data=path.read_bytes(),
-        method="PUT",
+        content=path.read_bytes(),
         headers={
             "Accept": "application/json",
             "Content-Type": "application/octet-stream",
             "Content-Disposition": f'attachment; filename="{path.name}"',
         },
+        timeout=TIKA_TIMEOUT_SECONDS,
     )
-    with urlopen(request, timeout=TIKA_TIMEOUT_SECONDS) as response:
-        result = json.load(response)
+    response.raise_for_status()
+    result = response.json()
 
     records = result if isinstance(result, list) else [result]
     if not records or not isinstance(records[0], dict):

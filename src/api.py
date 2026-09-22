@@ -3,20 +3,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import httpx
 import uvicorn
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import FileResponse
+from prefect.exceptions import PrefectException
 from psycopg import Error as PostgresError
 from pydantic import BaseModel, Field
 
+from background_tasks import process_upload
 from embeddings.flow import (
     available_embedding_providers,
     configured_models,
     generate_query_embeddings,
 )
-from embeddings.storage import hybrid_search
-from postgres_queue import enqueue_upload, ensure_schema
+from embeddings.storage import ensure_schema, hybrid_search
 from upload_events import S3_BUCKET, s3_client, safe_filename
 
 PRESIGN_TTL_SECONDS = 15 * 60
@@ -114,14 +116,18 @@ def notify(file: NotifyRequest) -> dict[str, str]:
     }
 
     try:
-        enqueue_upload(event)
-    except (PostgresError, OSError) as error:
+        future = process_upload.delay(event)
+    except (httpx.HTTPError, PrefectException, OSError) as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not queue the upload",
         ) from error
 
-    return {"status": "notified", "event_id": event_id}
+    return {
+        "status": "notified",
+        "event_id": event_id,
+        "task_run_id": str(future.task_run_id),
+    }
 
 
 @app.post("/query")

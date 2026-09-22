@@ -3524,10 +3524,12 @@ dependencies = [
     { name = "duckdb" },
     { name = "fastapi", extra = ["standard"] },
     { name = "fastembed" },
+    { name = "httpx" },
     { name = "langchain-text-splitters" },
     { name = "litellm" },
     { name = "prefect" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -3542,10 +3544,12 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.5.5" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.140.13" },
     { name = "fastembed", specifier = ">=0.7.4" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "langchain-text-splitters", specifier = ">=0.3.0" },
     { name = "litellm", specifier = ">=1.94.0" },
     { name = "prefect", specifier = ">=3.8.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.10" },
+    { name = "pydantic", specifier = ">=2.13.4" },
 ]
 
 [package.metadata.requires-dev]

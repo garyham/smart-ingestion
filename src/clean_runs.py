@@ -26,7 +26,7 @@ async def _clear_flow_runs() -> None:
         except httpx.TransportError:
             print(
                 f"Warning: could not reach the Prefect server at {api_url}. "
-                "Is it running? (./ingest server)",
+                "Is the Compose prefect service running?",
                 file=sys.stderr,
             )
             return
@@ -44,7 +44,7 @@ async def _clear_flow_runs() -> None:
             for run_id in remaining:
                 try:
                     await client.delete_flow_run(run_id)
-                except Exception:
+                except Exception:  # noqa: BLE001 - retry every failed deletion
                     failed.add(run_id)
             print(
                 f"  pass {pass_num}: deleted {len(remaining) - len(failed)}, {len(failed)} remaining"
