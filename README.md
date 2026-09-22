@@ -41,11 +41,11 @@ The upload process is:
 1. The API creates a signed SeaweedFS upload URL.
 2. The browser uploads the file directly to SeaweedFS.
 3. The API submits a Prefect `process-upload` background task.
-4. A long-lived ingestion worker downloads the file and runs the ingestion flow.
-5. The worker uploads an immutable artifact bundle and `manifest.json` last.
-6. Successful chunk bundles submit an `embed-document` background task.
-7. The embedding worker generates dense and sparse vectors in parallel.
-8. It writes both vector types in one PostgreSQL transaction.
+4. A worker downloads the file, calculates its SHA-256, and claims an ingestion row.
+5. A matching active or completed ingestion stops duplicate work.
+6. The worker uploads an immutable artifact bundle and `manifest.json` last.
+7. Successful chunk bundles submit an `embed-document` background task.
+8. The embedding worker generates and stores dense and sparse vectors.
 
 Prefect stores task state, applies ingestion retries, and exposes failures in its UI. The API and
 workers share `prefect_results`, which stores deferred task parameters and results.
@@ -82,6 +82,8 @@ The ingestion task returns this completion value after the manifest is stored:
   "schema_version": 1,
   "document_id": "uuid",
   "ingestion_id": "uuid",
+  "pipeline_version": "1",
+  "source_sha256": "hex-encoded SHA-256",
   "status": "ok",
   "artifact_type": "chunks",
   "manifest_uri": "s3://smart-files/ingested/<document-id>/<ingestion-id>/manifest.json",
@@ -91,6 +93,12 @@ The ingestion task returns this completion value after the manifest is stored:
 
 The worker submits embedding only when the status is `ok` and the artifact type is `chunks`.
 Immutable bundle paths and embedding upserts make retries safe.
+
+The `smart_files.ingestions` table tracks the pipeline state from source routing through embedding.
+Its `steps`, `outputs`, and `error` JSON fields allow the pipeline to gain new steps without a table
+migration.
+Rows are unique by source SHA-256 and `PIPELINE_VERSION`. Published files are retained when a later
+step fails, so the failed step can be retried without rolling back valid work.
 
 ### Configuration
 
@@ -106,6 +114,7 @@ Docker Compose uses these environment variables:
 | `POSTGRES_USER` | `prefect` |
 | `POSTGRES_PASSWORD` | `prefect` |
 | `DATABASE_URL` | `postgresql://prefect:prefect@127.0.0.1:5433/prefect` |
+| `PIPELINE_VERSION` | `1` |
 | `ARTIFACT_PREFIX` | `ingested` |
 | `TIKA_URL` | `http://tika:9998` |
 | `TIKA_TIMEOUT_SECONDS` | `120` |

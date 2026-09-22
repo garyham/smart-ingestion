@@ -1,8 +1,9 @@
-import hashlib
 import json
 import mimetypes
 from datetime import UTC, datetime
 from pathlib import Path
+
+from ingestion.storage import PIPELINE_VERSION, sha256_file
 
 SCHEMA_VERSION = 1
 _CONTENT_TYPES = {
@@ -10,14 +11,6 @@ _CONTENT_TYPES = {
     ".jsonl": "application/x-ndjson",
     ".duckdb": "application/vnd.duckdb",
 }
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for block in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def publish_bundle(
@@ -58,7 +51,7 @@ def publish_bundle(
                 "uri": f"s3://{bucket}/{key}",
                 "content_type": content_type,
                 "size": path.stat().st_size,
-                "sha256": _sha256(path),
+                "sha256": sha256_file(path),
             }
         )
 
@@ -66,6 +59,7 @@ def publish_bundle(
         "schema_version": SCHEMA_VERSION,
         "document_id": document_id,
         "ingestion_id": ingestion_id,
+        "pipeline_version": PIPELINE_VERSION,
         "created_at": datetime.now(UTC).isoformat(),
         "status": status,
         "artifact_type": artifact_type,
@@ -73,6 +67,7 @@ def publish_bundle(
             "bucket": source_event["bucket"],
             "object_key": source_event["object_key"],
             "filename": source_event["filename"],
+            "sha256": source_event["source_sha256"],
         },
         "artifacts": artifacts,
     }
@@ -88,8 +83,10 @@ def publish_bundle(
         "schema_version": SCHEMA_VERSION,
         "document_id": document_id,
         "ingestion_id": ingestion_id,
+        "pipeline_version": PIPELINE_VERSION,
         "status": status["status"],
         "artifact_type": artifact_type,
         "manifest_uri": f"s3://{bucket}/{manifest_key}",
+        "source_sha256": source_event["source_sha256"],
         "completed_at": manifest["created_at"],
     }

@@ -92,6 +92,7 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
       S3_BUCKET: ${S3_BUCKET:-smart-files}
       DATABASE_URL: postgresql://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      PIPELINE_VERSION: ${PIPELINE_VERSION:-1}
       DENSE_EMBEDDING_MODEL: ${DENSE_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
       SPARSE_EMBEDDING_MODEL: ${SPARSE_EMBEDDING_MODEL:-Qdrant/bm42-all-minilm-l6-v2-attentions}
       EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-auto}
@@ -140,6 +141,8 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
       S3_BUCKET: ${S3_BUCKET:-smart-files}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      PIPELINE_VERSION: ${PIPELINE_VERSION:-1}
       ARTIFACT_PREFIX: ${ARTIFACT_PREFIX:-ingested}
       TIKA_URL: http://tika:9998
       TIKA_TIMEOUT_SECONDS: ${TIKA_TIMEOUT_SECONDS:-120}
@@ -177,6 +180,7 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
       S3_BUCKET: ${S3_BUCKET:-smart-files}
       DATABASE_URL: postgresql://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      PIPELINE_VERSION: ${PIPELINE_VERSION:-1}
       DENSE_EMBEDDING_MODEL: ${DENSE_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
       SPARSE_EMBEDDING_MODEL: ${SPARSE_EMBEDDING_MODEL:-Qdrant/bm42-all-minilm-l6-v2-attentions}
       EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-auto}

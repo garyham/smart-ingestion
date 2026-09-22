@@ -25,6 +25,7 @@ class PublishBundleTests(unittest.TestCase):
             "bucket": "smart-files",
             "object_key": "uploads/doc/notes.txt",
             "filename": "notes.txt",
+            "source_sha256": "a" * 64,
         }
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -50,6 +51,8 @@ class PublishBundleTests(unittest.TestCase):
             manifest_object["Key"], "ingested/document-id/ingestion-id/manifest.json"
         )
         self.assertEqual(manifest["artifact_type"], "chunks")
+        self.assertEqual(manifest["pipeline_version"], "1")
+        self.assertEqual(manifest["source"]["sha256"], "a" * 64)
         self.assertEqual(len(manifest["artifacts"]), 3)
         self.assertEqual(event["status"], "ok")
         self.assertEqual(

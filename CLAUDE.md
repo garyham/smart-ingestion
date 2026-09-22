@@ -48,6 +48,10 @@ ingested/<document_id>/<ingestion_id>/
 After the manifest is stored, the ingestion task submits an embedding background task for a
 successful chunk bundle. Both stages are visible in Prefect.
 
+The source file SHA-256 and pipeline version identify duplicate work. The
+`smart_files.ingestions` table records the current step, status, outputs, and error. Completed
+artifacts are retained when embedding fails.
+
 Test/sample input documents live in `data/`.
 
 ### Failure is a valid outcome

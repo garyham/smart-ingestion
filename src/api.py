@@ -18,7 +18,9 @@ from embeddings.flow import (
     configured_models,
     generate_query_embeddings,
 )
-from embeddings.storage import ensure_schema, hybrid_search
+from embeddings.storage import ensure_schema as ensure_embedding_schema
+from embeddings.storage import hybrid_search
+from ingestion.storage import ensure_schema as ensure_ingestion_schema
 from upload_events import S3_BUCKET, s3_client, safe_filename
 
 PRESIGN_TTL_SECONDS = 15 * 60
@@ -28,7 +30,8 @@ QUERY_PATH = Path(__file__).with_name("static") / "query.html"
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    ensure_schema()
+    ensure_embedding_schema()
+    ensure_ingestion_schema()
     yield
 
 
@@ -148,5 +151,6 @@ def query_chunks(request: QueryRequest) -> dict[str, list[dict]]:
 
 
 def main() -> None:
-    ensure_schema()
+    ensure_embedding_schema()
+    ensure_ingestion_schema()
     uvicorn.run("api:app", host="127.0.0.1", port=8000)
