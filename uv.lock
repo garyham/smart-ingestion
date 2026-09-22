@@ -3520,6 +3520,7 @@ name = "smart-files"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "alembic" },
     { name = "boto3" },
     { name = "duckdb" },
     { name = "fastapi", extra = ["standard"] },
@@ -3530,6 +3531,7 @@ dependencies = [
     { name = "prefect" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
+    { name = "sqlalchemy" },
 ]
 
 [package.dev-dependencies]
@@ -3540,6 +3542,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.18.5" },
     { name = "boto3", specifier = ">=1.43.93" },
     { name = "duckdb", specifier = ">=1.5.5" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.140.13" },
@@ -3550,6 +3553,7 @@ requires-dist = [
     { name = "prefect", specifier = ">=3.8.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.10" },
     { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "sqlalchemy", specifier = ">=2.0.51" },
 ]
 
 [package.metadata.requires-dev]

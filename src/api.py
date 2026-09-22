@@ -1,16 +1,17 @@
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Annotated
 from uuid import UUID, uuid4
 
 import httpx
 import uvicorn
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from prefect.exceptions import PrefectException
 from psycopg import Error as PostgresError
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 
 from background_tasks import process_upload
 from embeddings.flow import (
@@ -18,9 +19,9 @@ from embeddings.flow import (
     configured_models,
     generate_query_embeddings,
 )
-from embeddings.storage import ensure_schema as ensure_embedding_schema
 from embeddings.storage import hybrid_search
-from ingestion.storage import ensure_schema as ensure_ingestion_schema
+from ingestion.schemas import IngestionRead, IngestionStatus
+from ingestion.storage import get_ingestion, list_ingestions
 from upload_events import S3_BUCKET, s3_client, safe_filename
 
 PRESIGN_TTL_SECONDS = 15 * 60
@@ -28,14 +29,7 @@ INDEX_PATH = Path(__file__).with_name("static") / "index.html"
 QUERY_PATH = Path(__file__).with_name("static") / "query.html"
 
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    ensure_embedding_schema()
-    ensure_ingestion_schema()
-    yield
-
-
-app = FastAPI(title="Smart Files", lifespan=lifespan)
+app = FastAPI(title="Smart Files")
 
 
 class FileDetails(BaseModel):
@@ -150,7 +144,50 @@ def query_chunks(request: QueryRequest) -> dict[str, list[dict]]:
     return {"results": results}
 
 
+@app.get("/ingestions", response_model=list[IngestionRead])
+def query_ingestions(
+    status_filter: Annotated[IngestionStatus | None, Query(alias="status")] = None,
+    source_sha256: Annotated[
+        str | None,
+        Query(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"),
+    ] = None,
+    document_id: UUID | None = None,
+    pipeline_version: Annotated[str | None, Query(min_length=1)] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[IngestionRead]:
+    try:
+        return list_ingestions(
+            status=status_filter,
+            source_sha256=source_sha256,
+            document_id=document_id,
+            pipeline_version=pipeline_version,
+            limit=limit,
+            offset=offset,
+        )
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not read ingestions",
+        ) from error
+
+
+@app.get("/ingestions/{ingestion_id}", response_model=IngestionRead)
+def read_ingestion(ingestion_id: UUID) -> IngestionRead:
+    try:
+        ingestion = get_ingestion(ingestion_id)
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not read the ingestion",
+        ) from error
+    if ingestion is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ingestion not found",
+        )
+    return ingestion
+
+
 def main() -> None:
-    ensure_embedding_schema()
-    ensure_ingestion_schema()
     uvicorn.run("api:app", host="127.0.0.1", port=8000)

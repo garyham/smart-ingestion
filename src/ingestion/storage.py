@@ -1,21 +1,38 @@
 import hashlib
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-import psycopg
-from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import sessionmaker
+
+from ingestion.models import Ingestion
+from ingestion.schemas import (
+    IngestionCreate,
+    IngestionRead,
+    IngestionStatus,
+    IngestionUpdate,
+)
 
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://prefect:prefect@127.0.0.1:5433/prefect"
+    "DATABASE_URL",
+    "postgresql://smart_files:smart_files@127.0.0.1:5435/smart_files",
 )
 PIPELINE_VERSION = os.getenv("PIPELINE_VERSION", "1")
-INGESTION_SCHEMA = "smart_files"
 
 
-def connect():
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+def _sqlalchemy_url(url: str) -> str:
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url
+
+
+engine = create_engine(_sqlalchemy_url(DATABASE_URL), pool_pre_ping=True)
+SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 
 def sha256_file(path: Path) -> str:
@@ -26,40 +43,23 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def ensure_ingestion_schema(cursor) -> None:
-    cursor.execute(
-        f"""
-        CREATE SCHEMA IF NOT EXISTS {INGESTION_SCHEMA};
-
-        CREATE TABLE IF NOT EXISTS {INGESTION_SCHEMA}.ingestions (
-            ingestion_id uuid PRIMARY KEY,
-            document_id uuid NOT NULL,
-            source_sha256 text NOT NULL CHECK (source_sha256 ~ '^[0-9a-f]{{64}}$'),
-            pipeline_version text NOT NULL,
-            status text NOT NULL CHECK (
-                status IN ('processing', 'published', 'embedding', 'completed', 'failed')
-            ),
-            current_step text NOT NULL,
-            source jsonb NOT NULL,
-            steps jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            outputs jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-            error jsonb,
-            created_at timestamptz NOT NULL DEFAULT now(),
-            updated_at timestamptz NOT NULL DEFAULT now(),
-            completed_at timestamptz,
-            UNIQUE (source_sha256, pipeline_version)
-        );
-
-        CREATE INDEX IF NOT EXISTS ingestions_status_idx
-            ON {INGESTION_SCHEMA}.ingestions (status, updated_at);
-        """
-    )
-
-
 def ensure_schema() -> None:
-    with connect() as connection, connection.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_xact_lock(hashtext('smart_files_schema'))")
-        ensure_ingestion_schema(cursor)
+    """Run Alembic migrations while holding the shared schema lock."""
+    config = Config()
+    config.set_main_option(
+        "script_location", str(Path(__file__).with_name("migrations"))
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext('smart_files_schema'))")
+        )
+        connection.execute(text("CREATE SCHEMA IF NOT EXISTS smart_files"))
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
+
+
+def _record(record: Ingestion) -> dict:
+    return IngestionRead.model_validate(record).model_dump(mode="python")
 
 
 def claim_ingestion(
@@ -69,63 +69,57 @@ def claim_ingestion(
     source: dict,
 ) -> tuple[bool, dict]:
     """Claim content for this pipeline version, or return its canonical ingestion."""
-    with connect() as connection, connection.cursor() as cursor:
-        ensure_ingestion_schema(cursor)
-        cursor.execute(
-            f"""
-            INSERT INTO {INGESTION_SCHEMA}.ingestions (
-                ingestion_id, document_id, source_sha256, pipeline_version,
-                status, current_step, source, steps
+    now = datetime.now(UTC)
+    request = IngestionCreate(
+        ingestion_id=ingestion_id,
+        document_id=document_id,
+        source_sha256=source_sha256,
+        pipeline_version=PIPELINE_VERSION,
+        source=source,
+    )
+    values = {
+        **request.model_dump(mode="python"),
+        "status": IngestionStatus.PROCESSING.value,
+        "current_step": "routing",
+        "source": source,
+        "steps": {"routing": {"status": "processing", "updated_at": now.isoformat()}},
+        "outputs": {},
+        "created_at": now,
+        "updated_at": now,
+    }
+    with SessionLocal.begin() as session:
+        statement = (
+            insert(Ingestion)
+            .values(**values)
+            .on_conflict_do_nothing(
+                index_elements=["source_sha256", "pipeline_version"]
             )
-            VALUES (
-                %s, %s, %s, %s, 'processing', 'routing', %s,
-                jsonb_build_object(
-                    'routing', jsonb_build_object('status', 'processing', 'updated_at', now())
-                )
-            )
-            ON CONFLICT (source_sha256, pipeline_version) DO NOTHING
-            RETURNING *
-            """,
-            (
-                UUID(ingestion_id),
-                UUID(document_id),
-                source_sha256,
-                PIPELINE_VERSION,
-                Jsonb(source),
-            ),
+            .returning(Ingestion)
         )
-        row = cursor.fetchone()
-        if row:
-            return True, dict(row)
+        record = session.scalars(statement).one_or_none()
+        if record is not None:
+            return True, _record(record)
 
-        cursor.execute(
-            f"""
-            SELECT * FROM {INGESTION_SCHEMA}.ingestions
-            WHERE source_sha256 = %s AND pipeline_version = %s
-            FOR UPDATE
-            """,
-            (source_sha256, PIPELINE_VERSION),
-        )
-        row = dict(cursor.fetchone())
-        owned = str(row["ingestion_id"]) == ingestion_id
-        if owned and row["status"] == "failed":
-            cursor.execute(
-                f"""
-                UPDATE {INGESTION_SCHEMA}.ingestions
-                SET status = 'processing', current_step = 'routing', error = NULL,
-                    steps = steps || jsonb_build_object(
-                        'routing', jsonb_build_object(
-                            'status', 'processing', 'updated_at', now()
-                        )
-                    ),
-                    updated_at = now(), completed_at = NULL
-                WHERE ingestion_id = %s
-                RETURNING *
-                """,
-                (UUID(ingestion_id),),
+        record = session.scalars(
+            select(Ingestion)
+            .where(
+                Ingestion.source_sha256 == source_sha256,
+                Ingestion.pipeline_version == PIPELINE_VERSION,
             )
-            row = dict(cursor.fetchone())
-        return owned, row
+            .with_for_update()
+        ).one()
+        owned = str(record.ingestion_id) == ingestion_id
+        if owned and record.status == IngestionStatus.FAILED.value:
+            record.status = IngestionStatus.PROCESSING.value
+            record.current_step = "routing"
+            record.error = None
+            record.steps = {
+                **record.steps,
+                "routing": {"status": "processing", "updated_at": now.isoformat()},
+            }
+            record.updated_at = now
+            record.completed_at = None
+        return owned, _record(record)
 
 
 def update_ingestion(
@@ -136,31 +130,61 @@ def update_ingestion(
     outputs: dict | None = None,
     error: dict | None = None,
 ) -> None:
-    completed = status == "completed"
-    with connect() as connection, connection.cursor() as cursor:
-        ensure_ingestion_schema(cursor)
-        cursor.execute(
-            f"""
-            UPDATE {INGESTION_SCHEMA}.ingestions
-            SET status = %s,
-                current_step = %s,
-                outputs = outputs || %s,
-                steps = steps || jsonb_build_object(
-                    %s, jsonb_build_object('status', %s, 'updated_at', now())
-                ),
-                error = %s,
-                updated_at = now(),
-                completed_at = CASE WHEN %s THEN now() ELSE completed_at END
-            WHERE ingestion_id = %s
-            """,
-            (
-                status,
-                current_step,
-                Jsonb(outputs or {}),
-                current_step,
-                status,
-                Jsonb(error) if error is not None else None,
-                completed,
-                UUID(ingestion_id),
-            ),
-        )
+    now = datetime.now(UTC)
+    change = IngestionUpdate(
+        status=status,
+        current_step=current_step,
+        outputs=outputs or {},
+        error=error,
+    )
+    with SessionLocal.begin() as session:
+        record = session.scalars(
+            select(Ingestion)
+            .where(Ingestion.ingestion_id == UUID(ingestion_id))
+            .with_for_update()
+        ).one()
+        record.status = change.status.value
+        record.current_step = change.current_step
+        record.outputs = {**record.outputs, **change.outputs}
+        record.steps = {
+            **record.steps,
+            change.current_step: {
+                "status": change.status.value,
+                "updated_at": now.isoformat(),
+            },
+        }
+        record.error = change.error
+        record.updated_at = now
+        if change.status == IngestionStatus.COMPLETED:
+            record.completed_at = now
+
+
+def get_ingestion(ingestion_id: UUID) -> IngestionRead | None:
+    with SessionLocal() as session:
+        record = session.get(Ingestion, ingestion_id)
+        return IngestionRead.model_validate(record) if record else None
+
+
+def list_ingestions(
+    *,
+    status: IngestionStatus | None = None,
+    source_sha256: str | None = None,
+    document_id: UUID | None = None,
+    pipeline_version: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[IngestionRead]:
+    statement = select(Ingestion)
+    if status is not None:
+        statement = statement.where(Ingestion.status == status.value)
+    if source_sha256 is not None:
+        statement = statement.where(Ingestion.source_sha256 == source_sha256)
+    if document_id is not None:
+        statement = statement.where(Ingestion.document_id == document_id)
+    if pipeline_version is not None:
+        statement = statement.where(Ingestion.pipeline_version == pipeline_version)
+    statement = (
+        statement.order_by(Ingestion.created_at.desc()).limit(limit).offset(offset)
+    )
+    with SessionLocal() as session:
+        return [IngestionRead.model_validate(row) for row in session.scalars(statement)]

@@ -12,12 +12,10 @@ from prefect.task_worker import serve
 from prefect.tasks import exponential_backoff
 
 from embeddings.flow import configured_models, embed_ingestion
-from ingestion.config import load_config
 from ingestion.publish import publish_bundle
-from ingestion.routing import ensure_concurrency_limits, route_document
+from ingestion.routing import route_document
 from ingestion.storage import (
     claim_ingestion,
-    ensure_schema,
     sha256_file,
     update_ingestion,
 )
@@ -192,12 +190,8 @@ def embed_document(
 
 
 def ingest_worker() -> None:
-    ensure_schema()
-    config = load_config()
-    ensure_concurrency_limits(config.get("concurrency_limits", {}))
     serve(process_upload, limit=1)
 
 
 def embedding_worker() -> None:
-    ensure_schema()
     serve(embed_document, limit=1)

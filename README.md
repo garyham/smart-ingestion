@@ -100,6 +100,61 @@ migration.
 Rows are unique by source SHA-256 and `PIPELINE_VERSION`. Published files are retained when a later
 step fails, so the failed step can be retried without rolling back valid work.
 
+Query ingestion state with `GET /ingestions`. It supports `status`, `source_sha256`, `document_id`,
+`pipeline_version`, `limit`, and `offset`. Use `GET /ingestions/{ingestion_id}` for one row.
+
+SQLAlchemy defines the ingestion model, Pydantic defines API records, and Alembic owns the table
+schema.
+
+### Database migrations
+
+The `smartfiles-init` service applies pending migrations and configures Prefect concurrency limits
+once. The API and workers start only after it succeeds. For local migration commands, start the
+Smart Files database first:
+
+```bash
+docker compose up -d smart-files-postgres
+```
+
+Show the current and available revisions:
+
+```bash
+uv run alembic current
+uv run alembic history
+```
+
+Apply all pending migrations:
+
+```bash
+uv run alembic upgrade head
+```
+
+After changing `src/ingestion/models.py`, create and review a migration before applying it:
+
+```bash
+uv run alembic revision --autogenerate -m "describe the schema change"
+uv run alembic upgrade head
+```
+
+Generated migrations are stored under `src/ingestion/migrations/versions/`. Alembic manages both
+ingestion and embedding storage. Embedding migrations use explicit SQL because they contain
+pgvector types. Always inspect generated operations before running them.
+
+Application migration state is stored in `smart_files.alembic_version` in the Smart Files
+database. Prefect uses a separate PostgreSQL database and manages its own migrations.
+
+Revert the latest migration during development:
+
+```bash
+uv run alembic downgrade -1
+```
+
+Generate SQL without changing the database:
+
+```bash
+uv run alembic upgrade head --sql
+```
+
 ### Configuration
 
 Docker Compose uses these environment variables:
@@ -110,10 +165,13 @@ Docker Compose uses these environment variables:
 | `S3_SECRET_ACCESS_KEY` | `smart_files_secret` |
 | `S3_BUCKET` | `smart-files` |
 | `WEB_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000,http://0.0.0.0:8000` |
-| `POSTGRES_DB` | `prefect` |
-| `POSTGRES_USER` | `prefect` |
-| `POSTGRES_PASSWORD` | `prefect` |
-| `DATABASE_URL` | `postgresql://prefect:prefect@127.0.0.1:5433/prefect` |
+| `PREFECT_POSTGRES_DB` | `prefect` |
+| `PREFECT_POSTGRES_USER` | `prefect` |
+| `PREFECT_POSTGRES_PASSWORD` | `prefect` |
+| `SMART_FILES_POSTGRES_DB` | `smart_files` |
+| `SMART_FILES_POSTGRES_USER` | `smart_files` |
+| `SMART_FILES_POSTGRES_PASSWORD` | `smart_files` |
+| `DATABASE_URL` | `postgresql://smart_files:smart_files@127.0.0.1:5435/smart_files` |
 | `PIPELINE_VERSION` | `1` |
 | `ARTIFACT_PREFIX` | `ingested` |
 | `TIKA_URL` | `http://tika:9998` |
@@ -127,8 +185,8 @@ The standard image installs CPU FastEmbed. A GPU deployment must replace it with
 `fastembed-gpu` and include compatible NVIDIA CUDA and cuDNN libraries. With
 `EMBEDDING_DEVICE=auto`, the worker uses CUDA when ONNX Runtime exposes it and otherwise uses CPU.
 
-The PostgreSQL data is stored in the `postgres_data` Docker volume. Existing data in
-`~/.prefect/prefect.db` is not migrated or used by the Compose services.
+Prefect and Smart Files use the `prefect_postgres_data` and `smart_files_postgres_data` Docker
+volumes. Existing data in the former `postgres_data` volume is not migrated automatically.
 
 ### Document handling
 

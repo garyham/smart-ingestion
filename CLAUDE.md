@@ -71,6 +71,9 @@ and embedding background tasks and their long-lived workers. The API submits ing
 `config/config.yaml`. The per-concern logic lives under `src/ingestion/`:
 
 - `src/ingestion/config.py` — loads concurrency limits from `config/config.yaml`.
+- `src/ingestion/models.py` / `schemas.py` — SQLAlchemy ingestion model and Pydantic API schema.
+- `src/ingestion/storage.py` — ingestion claims, state changes, queries, and Alembic startup.
+- `src/ingestion/migrations/` — Alembic migrations for ingestion storage.
 - `src/ingestion/tika.py` — Tika client, MIME detection, text extraction, and common metadata.
 - `src/ingestion/routing.py` — `route_document`, dispatching a detected document to the right
   ingestion subflow (Tika or xlsx).

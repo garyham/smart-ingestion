@@ -7,52 +7,14 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://prefect:prefect@127.0.0.1:5433/prefect"
+    "DATABASE_URL",
+    "postgresql://smart_files:smart_files@127.0.0.1:5435/smart_files",
 )
 EMBEDDING_SCHEMA = "smart_files"
 
 
 def connect():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
-
-
-def ensure_embedding_schema(cursor) -> None:
-    """Create the pgvector extension and the idempotent embedding target table."""
-    cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    cursor.execute(
-        f"""
-        CREATE SCHEMA IF NOT EXISTS {EMBEDDING_SCHEMA};
-
-        CREATE TABLE IF NOT EXISTS {EMBEDDING_SCHEMA}.chunk_embeddings (
-            ingestion_id uuid NOT NULL,
-            document_id uuid NOT NULL,
-            chunk_index integer NOT NULL,
-            headings jsonb NOT NULL DEFAULT '[]'::jsonb,
-            content text NOT NULL,
-            dense_model text NOT NULL,
-            sparse_model text NOT NULL,
-            dense_embedding vector NOT NULL,
-            sparse_embedding sparsevec NOT NULL,
-            created_at timestamptz NOT NULL DEFAULT now(),
-            updated_at timestamptz NOT NULL DEFAULT now(),
-            PRIMARY KEY (
-                ingestion_id,
-                chunk_index,
-                dense_model,
-                sparse_model
-            )
-        );
-
-        CREATE INDEX IF NOT EXISTS chunk_embeddings_document_idx
-            ON {EMBEDDING_SCHEMA}.chunk_embeddings (document_id, ingestion_id);
-        """
-    )
-
-
-def ensure_schema() -> None:
-    with connect() as connection, connection.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_xact_lock(hashtext('smart_files_schema'))")
-        ensure_embedding_schema(cursor)
 
 
 def dense_vector_literal(values: list[float]) -> str:
@@ -109,7 +71,6 @@ def upsert_embeddings(
     ]
 
     with connect() as connection, connection.cursor() as cursor:
-        ensure_embedding_schema(cursor)
         cursor.executemany(
             f"""
             INSERT INTO {EMBEDDING_SCHEMA}.chunk_embeddings (

@@ -1,14 +1,32 @@
 services:
-  postgres:
-    image: pgvector/pgvector:pg17
+  prefect-postgres:
+    image: postgres:17
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-prefect}
-      POSTGRES_USER: ${POSTGRES_USER:-prefect}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prefect}
+      POSTGRES_DB: ${PREFECT_POSTGRES_DB:-prefect}
+      POSTGRES_USER: ${PREFECT_POSTGRES_USER:-prefect}
+      POSTGRES_PASSWORD: ${PREFECT_POSTGRES_PASSWORD:-prefect}
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - prefect_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  smart-files-postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: ${SMART_FILES_POSTGRES_DB:-smart_files}
+      POSTGRES_USER: ${SMART_FILES_POSTGRES_USER:-smart_files}
+      POSTGRES_PASSWORD: ${SMART_FILES_POSTGRES_PASSWORD:-smart_files}
+    ports:
+      - "127.0.0.1:5435:5432"
+    volumes:
+      - smart_files_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -21,11 +39,11 @@ services:
     build: .
     command: ["prefect", "server", "start", "--host", "0.0.0.0"]
     environment:
-      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${PREFECT_POSTGRES_USER:-prefect}:${PREFECT_POSTGRES_PASSWORD:-prefect}@prefect-postgres:5432/${PREFECT_POSTGRES_DB:-prefect}
     ports:
       - "127.0.0.1:4200:4200"
     depends_on:
-      postgres:
+      prefect-postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://localhost:4200/api/health', timeout=2)"]
@@ -34,6 +52,19 @@ services:
       retries: 20
       start_period: 15s
     restart: unless-stopped
+
+  smartfiles-init:
+    build: .
+    command: ["smart-files-init"]
+    environment:
+      PREFECT_API_URL: http://prefect:4200/api
+      DATABASE_URL: postgresql://${SMART_FILES_POSTGRES_USER:-smart_files}:${SMART_FILES_POSTGRES_PASSWORD:-smart_files}@smart-files-postgres:5432/${SMART_FILES_POSTGRES_DB:-smart_files}
+    depends_on:
+      prefect:
+        condition: service_healthy
+      smart-files-postgres:
+        condition: service_healthy
+    restart: "no"
 
   seaweedfs:
     image: chrislusf/seaweedfs:4.46
@@ -91,7 +122,7 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
       S3_BUCKET: ${S3_BUCKET:-smart-files}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      DATABASE_URL: postgresql://${SMART_FILES_POSTGRES_USER:-smart_files}:${SMART_FILES_POSTGRES_PASSWORD:-smart_files}@smart-files-postgres:5432/${SMART_FILES_POSTGRES_DB:-smart_files}
       PIPELINE_VERSION: ${PIPELINE_VERSION:-1}
       DENSE_EMBEDDING_MODEL: ${DENSE_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
       SPARSE_EMBEDDING_MODEL: ${SPARSE_EMBEDDING_MODEL:-Qdrant/bm42-all-minilm-l6-v2-attentions}
@@ -103,9 +134,9 @@ services:
     depends_on:
       prefect:
         condition: service_healthy
+      smartfiles-init:
+        condition: service_completed_successfully
       seaweedfs:
-        condition: service_healthy
-      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://localhost:8000/health', timeout=2)"]
@@ -141,7 +172,7 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
       S3_BUCKET: ${S3_BUCKET:-smart-files}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      DATABASE_URL: postgresql://${SMART_FILES_POSTGRES_USER:-smart_files}:${SMART_FILES_POSTGRES_PASSWORD:-smart_files}@smart-files-postgres:5432/${SMART_FILES_POSTGRES_DB:-smart_files}
       PIPELINE_VERSION: ${PIPELINE_VERSION:-1}
       ARTIFACT_PREFIX: ${ARTIFACT_PREFIX:-ingested}
       TIKA_URL: http://tika:9998
@@ -149,9 +180,9 @@ services:
     depends_on:
       prefect:
         condition: service_healthy
+      smartfiles-init:
+        condition: service_completed_successfully
       seaweedfs:
-        condition: service_healthy
-      postgres:
         condition: service_healthy
       tika:
         condition: service_healthy
@@ -179,7 +210,7 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-smart_files}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-smart_files_secret}
       S3_BUCKET: ${S3_BUCKET:-smart-files}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      DATABASE_URL: postgresql://${SMART_FILES_POSTGRES_USER:-smart_files}:${SMART_FILES_POSTGRES_PASSWORD:-smart_files}@smart-files-postgres:5432/${SMART_FILES_POSTGRES_DB:-smart_files}
       PIPELINE_VERSION: ${PIPELINE_VERSION:-1}
       DENSE_EMBEDDING_MODEL: ${DENSE_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
       SPARSE_EMBEDDING_MODEL: ${SPARSE_EMBEDDING_MODEL:-Qdrant/bm42-all-minilm-l6-v2-attentions}
@@ -187,15 +218,16 @@ services:
     depends_on:
       prefect:
         condition: service_healthy
+      smartfiles-init:
+        condition: service_completed_successfully
       seaweedfs:
-        condition: service_healthy
-      postgres:
         condition: service_healthy
     volumes:
       - prefect_results:/task-results
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  prefect_postgres_data:
+  smart_files_postgres_data:
   prefect_results:
   seaweedfs_data:

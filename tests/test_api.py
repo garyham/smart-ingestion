@@ -1,5 +1,7 @@
 import unittest
+from datetime import UTC, datetime
 from unittest.mock import patch
+from uuid import UUID
 
 from fastapi import HTTPException
 
@@ -10,7 +12,26 @@ from api import (
     notify,
     presign,
     query_chunks,
+    query_ingestions,
+    read_ingestion,
     safe_filename,
+)
+from ingestion.schemas import IngestionRead, IngestionStatus
+
+INGESTION = IngestionRead(
+    ingestion_id="38e00553-d6cc-4bf7-9293-27bb86563c36",
+    document_id="c63752f4-8d18-4da2-a107-24c52d0707cc",
+    source_sha256="a" * 64,
+    pipeline_version="1",
+    status="completed",
+    current_step="embedding",
+    source={"filename": "notes.txt"},
+    steps={},
+    outputs={},
+    error=None,
+    created_at=datetime.now(UTC),
+    updated_at=datetime.now(UTC),
+    completed_at=datetime.now(UTC),
 )
 
 
@@ -90,6 +111,43 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response["results"][0]["content"], "matching chunk")
         search.assert_called_once_with([0.1], {"indices": []}, "dense", "sparse", 3)
+
+    @patch("api.list_ingestions", return_value=[INGESTION])
+    def test_query_ingestions_supports_filters(self, list_records):
+        result = query_ingestions(
+            status_filter=IngestionStatus.COMPLETED,
+            source_sha256="a" * 64,
+            document_id=INGESTION.document_id,
+            pipeline_version="1",
+            limit=20,
+            offset=10,
+        )
+
+        self.assertEqual(result, [INGESTION])
+        list_records.assert_called_once_with(
+            status=IngestionStatus.COMPLETED,
+            source_sha256="a" * 64,
+            document_id=INGESTION.document_id,
+            pipeline_version="1",
+            limit=20,
+            offset=10,
+        )
+
+    @patch("api.get_ingestion", return_value=INGESTION)
+    def test_read_ingestion_returns_record(self, get_record):
+        ingestion_id = UUID("38e00553-d6cc-4bf7-9293-27bb86563c36")
+
+        result = read_ingestion(ingestion_id)
+
+        self.assertEqual(result, INGESTION)
+        get_record.assert_called_once_with(ingestion_id)
+
+    @patch("api.get_ingestion", return_value=None)
+    def test_read_ingestion_returns_not_found(self, _get_record):
+        with self.assertRaises(HTTPException) as raised:
+            read_ingestion(UUID("38e00553-d6cc-4bf7-9293-27bb86563c36"))
+
+        self.assertEqual(raised.exception.status_code, 404)
 
 
 if __name__ == "__main__":
