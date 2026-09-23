@@ -3,12 +3,10 @@ import mimetypes
 import os
 import time
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from prefect.client.orchestration import get_client
-
-from upload_events import S3_BUCKET, s3_client, safe_filename
 
 API_URL = os.getenv("SMART_FILES_API_URL", "http://127.0.0.1:8000").rstrip("/")
 
@@ -20,13 +18,9 @@ def positive_int(value: str) -> int:
     return number
 
 
-def make_notification(
-    path: Path, document_id: str, object_key: str
-) -> dict[str, str | int]:
+def upload_details(path: Path) -> dict[str, str | int]:
     content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return {
-        "document_id": document_id,
-        "object_key": object_key,
         "filename": path.name,
         "content_type": content_type,
         "size": path.stat().st_size,
@@ -57,44 +51,43 @@ def wait_for_completions(expected: set[UUID], timeout: float) -> None:
 
 
 def run(count: int, data_dir: Path, timeout: float) -> None:
+    """Drive the real upload path: presign, write bytes, notify, wait.
+
+    Each iteration is a new logical document, but identical bytes are deduplicated by
+    content, so reuploading the same file exercises the reuse path rather than the
+    operators. Point `--data-dir` at least `--count` distinct files to load the operators.
+    """
     files = sorted(path for path in data_dir.iterdir() if path.is_file())
     if not files:
         raise SystemExit(f"No files found in {data_dir}")
 
-    object_keys: list[str] = []
-    client = s3_client()
-    try:
-        task_run_ids: set[UUID] = set()
-        for index in range(count):
-            path = files[index % len(files)]
-            document_id = str(uuid4())
-            object_key = f"uploads/{document_id}/{safe_filename(path.name)}"
-            content_type = (
-                mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-            )
-            client.upload_file(
-                str(path),
-                S3_BUCKET,
-                object_key,
-                ExtraArgs={"ContentType": content_type},
-            )
-            object_keys.append(object_key)
-            response = httpx.post(
-                f"{API_URL}/notify",
-                json=make_notification(path, document_id, object_key),
-                timeout=30,
-            )
-            response.raise_for_status()
-            task_run_ids.add(UUID(response.json()["task_run_id"]))
-        print(f"Queued {count} notification(s)")
-        wait_for_completions(task_run_ids, timeout)
-    finally:
-        if object_keys:
-            client.delete_objects(
-                Bucket=S3_BUCKET,
-                Delete={"Objects": [{"Key": key} for key in object_keys]},
-            )
-        print(f"Removed {len(object_keys)} source file(s) from SeaweedFS")
+    task_run_ids: set[UUID] = set()
+    for index in range(count):
+        path = files[index % len(files)]
+        details = upload_details(path)
+
+        presign = httpx.post(f"{API_URL}/presign", json=details, timeout=30)
+        presign.raise_for_status()
+        session = presign.json()
+
+        upload = httpx.put(
+            session["upload_url"],
+            content=path.read_bytes(),
+            headers=session["upload_headers"],
+            timeout=120,
+        )
+        upload.raise_for_status()
+
+        notify = httpx.post(
+            f"{API_URL}/notify",
+            json={"document_id": session["document_id"]},
+            timeout=60,
+        )
+        notify.raise_for_status()
+        task_run_ids.add(UUID(notify.json()["task_run_id"]))
+
+    print(f"Queued {count} notification(s)")
+    wait_for_completions(task_run_ids, timeout)
 
 
 def main() -> None:

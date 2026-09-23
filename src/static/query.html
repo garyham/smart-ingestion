@@ -20,7 +20,7 @@
   </head>
   <body>
     <main>
-      <p><a href="/">← Upload</a></p>
+      <p><a href="/">← Upload</a> · <a href="/library">Documents</a></p>
       <h1>Search indexed chunks</h1>
       <form id="query-form">
         <input id="query" name="query" type="search" maxlength="2000"
@@ -44,12 +44,13 @@
         const heading = document.createElement("h2");
         const content = document.createElement("p");
         const meta = document.createElement("div");
-        heading.textContent = result.headings.length
-          ? result.headings.join(" › ")
+        const chunk = result.chunk;
+        heading.textContent = chunk.headings.length
+          ? chunk.headings.join(" › ")
           : `Result ${index + 1}`;
-        content.textContent = result.content;
+        content.textContent = chunk.text;
         meta.className = "meta";
-        meta.textContent = `Document ${result.document_id} · Chunk ${result.chunk_index}`;
+        meta.textContent = `${result.document_name} · Chunk ${chunk.index}`;
         article.append(heading, content, meta);
         item.append(article);
         results.append(item);

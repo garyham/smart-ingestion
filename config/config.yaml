@@ -1,6 +1,17 @@
-# Per-document-type concurrency caps. Enforced via Prefect global concurrency limits (see
-# ingestion/routing.py), so at most this many ingestions of each type run at once, regardless
-# of how many documents are being processed concurrently overall.
+# Concurrency caps, enforced via Prefect global concurrency limits (see ingestion/routing.py):
+# `tika` bounds concurrent Tika parses, and `xlsx` bounds concurrent DuckDB builds, however
+# many documents are being processed overall.
 concurrency_limits:
   tika: 4
   xlsx: 2
+
+# The active release: the operator versions new documents are ingested with, and the
+# embedders a search covers when no embedding set is named. A release only selects
+# versions - it is never part of an operator's reuse key, so publishing a new release
+# reuses whatever earlier releases already produced and never triggers a backfill.
+release:
+  name: release-1
+  extractor: tika@1
+  chunker: chunker@2
+  embedders:
+    - hybrid@1

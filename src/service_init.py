@@ -1,6 +1,6 @@
 from ingestion.config import load_config
 from ingestion.routing import ensure_concurrency_limits
-from ingestion.storage import ensure_schema
+from store.schema import ensure_schema
 
 
 def initialize() -> None:

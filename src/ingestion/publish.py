@@ -1,10 +1,20 @@
+"""The immutable ingestion bundle.
+
+This module owns the `ingested/` object layout: it is the only place those keys are built,
+so neither the API nor the orchestrator constructs a bucket name or an object key.
+"""
+
+import hashlib
 import json
 import mimetypes
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ingestion.storage import PIPELINE_VERSION, sha256_file
+from upload_events import ARTIFACT_PREFIX, S3_BUCKET, s3_client
 
+# Recorded in each manifest for provenance only; it is never part of a reuse key.
+PIPELINE_VERSION = os.getenv("PIPELINE_VERSION", "1")
 SCHEMA_VERSION = 1
 _CONTENT_TYPES = {
     ".json": "application/json",
@@ -13,24 +23,30 @@ _CONTENT_TYPES = {
 }
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for block in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def publish_bundle(
-    client,
-    bucket: str,
-    prefix: str,
     document_id: str,
     ingestion_id: str,
-    source_event: dict,
+    source: dict,
     doc_dir: Path,
+    *,
+    artifact_type: str,
+    chunks: dict | None = None,
+    client=None,
+    bucket: str = S3_BUCKET,
+    prefix: str = ARTIFACT_PREFIX,
 ) -> dict:
     """Upload all artifacts, then upload the manifest as the completion marker."""
+    client = client or s3_client()
     bundle_prefix = f"{prefix}/{document_id}/{ingestion_id}"
     status = json.loads((doc_dir / "status.json").read_text())
-    if next(doc_dir.glob("*.duckdb"), None):
-        artifact_type = "duckdb"
-    elif (doc_dir / "chunks.jsonl").exists():
-        artifact_type = "chunks"
-    else:
-        artifact_type = "diagnostic"
     artifacts = []
 
     for path in sorted(item for item in doc_dir.rglob("*") if item.is_file()):
@@ -63,12 +79,11 @@ def publish_bundle(
         "created_at": datetime.now(UTC).isoformat(),
         "status": status,
         "artifact_type": artifact_type,
-        "source": {
-            "bucket": source_event["bucket"],
-            "object_key": source_event["object_key"],
-            "filename": source_event["filename"],
-            "sha256": source_event["source_sha256"],
-        },
+        # The source is named by reference. Where its bytes live is the document store's
+        # business, not the bundle's.
+        "source": source,
+        # Chunks live in the store, named here by the chunker that cut them.
+        "chunks": chunks,
         "artifacts": artifacts,
     }
     manifest_key = f"{bundle_prefix}/manifest.json"
@@ -87,6 +102,7 @@ def publish_bundle(
         "status": status["status"],
         "artifact_type": artifact_type,
         "manifest_uri": f"s3://{bucket}/{manifest_key}",
-        "source_sha256": source_event["source_sha256"],
+        "chunks": chunks,
+        "source_content_id": source.get("content_id"),
         "completed_at": manifest["created_at"],
     }

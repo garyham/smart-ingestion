@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from load_test import make_notification, positive_int
+from load_test import positive_int, upload_details
 
 
 class LoadTestTests(unittest.TestCase):
@@ -12,21 +12,15 @@ class LoadTestTests(unittest.TestCase):
         with self.assertRaises(argparse.ArgumentTypeError):
             positive_int("0")
 
-    def test_make_notification_describes_upload(self):
+    def test_upload_details_describe_the_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "report.pdf"
             path.write_bytes(b"test")
-            notification = make_notification(
-                path,
-                "c63752f4-8d18-4da2-a107-24c52d0707cc",
-                "uploads/c63752f4-8d18-4da2-a107-24c52d0707cc/report.pdf",
-            )
+            details = upload_details(path)
 
-        self.assertEqual(notification["size"], 4)
-        self.assertEqual(notification["content_type"], "application/pdf")
-        self.assertEqual(
-            notification["document_id"], "c63752f4-8d18-4da2-a107-24c52d0707cc"
-        )
+        self.assertEqual(details["size"], 4)
+        self.assertEqual(details["content_type"], "application/pdf")
+        self.assertEqual(details["filename"], "report.pdf")
 
 
 if __name__ == "__main__":

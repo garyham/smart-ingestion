@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
-from prefect import task
 
 TIKA_URL = os.getenv("TIKA_URL", "http://127.0.0.1:9998")
 TIKA_TIMEOUT_SECONDS = float(os.getenv("TIKA_TIMEOUT_SECONDS", "120"))
@@ -28,16 +27,15 @@ def _content(record: dict) -> str:
     return str(_first(value))
 
 
-@task
-def extract_with_tika(path: Path) -> TikaDocument:
+def parse_document(data: bytes, filename: str) -> TikaDocument:
     """Detect the MIME type and extract metadata and plain text in one Tika parse."""
     response = httpx.put(
         f"{TIKA_URL.rstrip('/')}/rmeta/text",
-        content=path.read_bytes(),
+        content=data,
         headers={
             "Accept": "application/json",
             "Content-Type": "application/octet-stream",
-            "Content-Disposition": f'attachment; filename="{path.name}"',
+            "Content-Disposition": f'attachment; filename="{filename}"',
         },
         timeout=TIKA_TIMEOUT_SECONDS,
     )
@@ -65,13 +63,14 @@ def extract_with_tika(path: Path) -> TikaDocument:
     return TikaDocument(mime_type=mime_type, metadata=metadata, text=text)
 
 
-def document_metadata(doc: Path, tika: TikaDocument) -> dict:
+def document_metadata(doc: Path | str, tika: TikaDocument) -> dict:
     """Build the common metadata stored for every document."""
+    name = doc.name if isinstance(doc, Path) else doc
     title = _first(tika.metadata.get("dc:title")) or _first(tika.metadata.get("title"))
     return {
-        "title": title or doc.stem,
+        "title": title or Path(name).stem,
         "mime_type": tika.mime_type,
-        "origin_filename": doc.name,
+        "origin_filename": name,
         "converter": "apache-tika",
         "tika": tika.metadata,
     }

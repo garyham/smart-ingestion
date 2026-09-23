@@ -1,20 +1,29 @@
-from pathlib import Path
+"""Which ingestion path a MIME type belongs to, and the concurrency slots the work holds.
+
+Routing decides and names; it neither detects nor runs. The flow's extractor reports the
+type and the flow dispatches to the path this returns, so every stage of the work is a
+Prefect task of its own rather than something hidden inside one opaque call.
+"""
+
+from contextlib import contextmanager
 
 from prefect.client.orchestration import get_client
 from prefect.concurrency.sync import concurrency
 
-from ingestion.tika import extract_with_tika
-from ingestion.tika_ingest import tika_ingest_flow
-from ingestion.xlsx_ingest import xlsx_ingest_flow
+CHUNKS = "chunks"
+DUCKDB = "duckdb"
 
-_XLSX_MIME_TYPES = {
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.oasis.opendocument.spreadsheet",
-}
+# Spreadsheets become a queryable dataset, not chunks, so they never reach a chunker.
+SPREADSHEET_MIME_TYPES = frozenset(
+    {
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.oasis.opendocument.spreadsheet",
+    }
+)
 
 # Maps a config/config.yaml `concurrency_limits` key to the Prefect global concurrency
-# limit name that `route_document` acquires a slot from before running that document type.
+# limit that bounds it: `tika` for extraction, `xlsx` for building a DuckDB dataset.
 _CONCURRENCY_LIMIT_NAMES = {
     "tika": "tika-ingest",
     "xlsx": "xlsx-ingest",
@@ -22,10 +31,11 @@ _CONCURRENCY_LIMIT_NAMES = {
 
 
 def ensure_concurrency_limits(limits: dict[str, int]) -> None:
-    """Idempotently create/update the global concurrency limits `route_document` relies on.
+    """Idempotently create/update the global concurrency limits the flow relies on.
 
-    Must run before any document is routed - `concurrency()` is called with `strict=True`,
-    so it raises rather than silently running unbounded if a limit hasn't been provisioned yet.
+    Must run before any document is ingested - `concurrency()` is called with
+    `strict=True`, so it raises rather than silently running unbounded if a limit hasn't
+    been provisioned yet.
     """
     with get_client(sync_client=True) as client:
         for key, limit in limits.items():
@@ -34,17 +44,13 @@ def ensure_concurrency_limits(limits: dict[str, int]) -> None:
             )
 
 
-def route_document(doc: Path, output_root: Path) -> None:
-    """Parse with Tika, then run a supplementary flow when needed."""
-    with concurrency(_CONCURRENCY_LIMIT_NAMES["tika"], strict=True):
-        tika = extract_with_tika(doc)
+def route_mime_type(mime_type: str) -> str:
+    """Name the path a document of this MIME type belongs to: `chunks` or `duckdb`."""
+    return DUCKDB if mime_type in SPREADSHEET_MIME_TYPES else CHUNKS
 
-    print(f"{doc.name}: {tika.mime_type} (apache-tika)")
 
-    if tika.mime_type in _XLSX_MIME_TYPES:
-        print("  route: xlsx -> DuckDB metadata extraction")
-        with concurrency(_CONCURRENCY_LIMIT_NAMES["xlsx"], strict=True):
-            xlsx_ingest_flow(doc, tika, output_root)
-    else:
-        print("  route: tika text + chunking")
-        tika_ingest_flow(doc, tika, output_root)
+@contextmanager
+def concurrency_slot(key: str):
+    """Hold a slot in the `concurrency_limits` entry named `key` for the work inside."""
+    with concurrency(_CONCURRENCY_LIMIT_NAMES[key], strict=True):
+        yield

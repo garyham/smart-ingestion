@@ -56,7 +56,7 @@
       </form>
       <p id="status" role="status" aria-live="polite"></p>
 
-      <p><a href="/query">Search indexed chunks</a></p>
+      <p><a href="/query">Search indexed chunks</a> · <a href="/library">Documents</a></p>
 
       <nav aria-labelledby="observability-heading">
         <h2 id="observability-heading">Observability</h2>
@@ -74,12 +74,42 @@
       const status = document.querySelector("#status");
       const button = form.querySelector("button");
 
+      // WebCrypto has no incremental digest, so hashing holds the whole file in memory.
+      // Past this size the check is skipped rather than paid for.
+      const HASH_SIZE_LIMIT = 64 * 1024 * 1024;
+
       async function readJson(response) {
         const body = await response.json().catch(() => ({}));
         if (!response.ok) {
           throw new Error(body.detail || `Request failed (${response.status})`);
         }
         return body;
+      }
+
+      async function sha256(file) {
+        const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+        return Array.from(new Uint8Array(digest), (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join("");
+      }
+
+      // A document is its bytes, so their hash is enough to ask whether this file has been
+      // seen - and a file that has been costs one small request instead of an upload. The
+      // check is only ever an optimisation: if it cannot run or fails, we upload as before
+      // and the server hashes what arrives.
+      async function findExistingDocument(file) {
+        if (!window.crypto?.subtle || file.size > HASH_SIZE_LIMIT) return null;
+        try {
+          const contentId = await sha256(file);
+          const response = await fetch(
+            `/documents/lookup?sha256=${encodeURIComponent(contentId)}`,
+          );
+          if (!response.ok) return null;
+          const body = await response.json();
+          return body.known ? body : null;
+        } catch {
+          return null;
+        }
       }
 
       form.addEventListener("submit", async (event) => {
@@ -95,9 +125,18 @@
         };
 
         button.disabled = true;
-        status.textContent = "Creating upload URL…";
+        status.textContent = "Checking whether this file is already known…";
 
         try {
+          const existing = await findExistingDocument(file);
+          if (existing) {
+            form.reset();
+            status.textContent =
+              `Already ingested as document ${existing.document_id}. Nothing was uploaded.`;
+            return;
+          }
+
+          status.textContent = "Creating upload URL…";
           const presignResponse = await fetch("/presign", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
@@ -106,9 +145,11 @@
           const presign = await readJson(presignResponse);
 
           status.textContent = "Uploading…";
+          // The headers are part of the signature: they make this a single write of
+          // exactly the declared size, so the bytes cannot change once they are hashed.
           const uploadResponse = await fetch(presign.upload_url, {
             method: "PUT",
-            headers: {"Content-Type": contentType},
+            headers: presign.upload_headers,
             body: file,
           });
           if (!uploadResponse.ok) {
@@ -119,11 +160,7 @@
           const notifyResponse = await fetch("/notify", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-              ...details,
-              object_key: presign.object_key,
-              document_id: presign.document_id,
-            }),
+            body: JSON.stringify({document_id: presign.document_id}),
           });
           const notification = await readJson(notifyResponse);
 
