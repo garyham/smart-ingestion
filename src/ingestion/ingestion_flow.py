@@ -89,7 +89,7 @@ def _retryable(_task, _task_run, state) -> bool:
     return not isinstance(failure, (InvalidUploadEvent, InvalidUpload))
 
 
-def _ingest_crashed(_flow, flow_run, state) -> None:
+def _ingest_crashed(flow, flow_run, state) -> None:
     """A candidate that was never committed, or was a duplicate, has no row to record on.
 
     Recording on a missing document is a no-op, so the candidate ID is enough.

@@ -37,7 +37,7 @@ class VectorTests(unittest.TestCase):
 class RegistryTests(unittest.TestCase):
     def test_finds_an_embedder_by_version(self):
         embedder = embedders.get("hybrid@1", device="cpu")
-        self.assertIsInstance(embedder, HybridV1)
+        assert isinstance(embedder, HybridV1)
         self.assertEqual(embedder.device, "cpu")
 
     def test_rejects_an_unknown_embedder(self):

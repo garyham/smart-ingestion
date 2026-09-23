@@ -93,6 +93,7 @@ def setUpModule():
 
 
 def tearDownModule():
+    assert _harness is not None
     _harness.__exit__(None, None, None)
 
 
@@ -212,6 +213,7 @@ class ChunkDocumentFlowTests(unittest.TestCase):
 
         result = chunk_document_flow(EXTRACTION_REF, "chunker@2")
 
+        assert result.chunks is not None
         self.assertTrue(result.chunks.reused)
         self.store.find_chunks.assert_called_once_with(EXTRACTION_REF, "chunker@2")
         self.store.extracted_text.assert_not_called()
@@ -241,6 +243,7 @@ class ChunkDocumentFlowTests(unittest.TestCase):
         result = chunk_document_flow(EXTRACTION_REF, "chunker@2")
 
         self.assertEqual(result.status, ArtifactStatus.NEEDS_INTERVENTION)
+        assert result.error is not None
         self.assertEqual(result.error["reason"], "no_content_extracted")
         self.assertIsNone(result.chunks)
         self.store.add_chunks.assert_not_called()

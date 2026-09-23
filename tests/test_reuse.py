@@ -54,7 +54,9 @@ def database_is_reachable() -> bool:
 
 def count(model, *conditions) -> int:
     with SessionLocal() as session:
-        return session.scalar(select(func.count()).select_from(model).where(*conditions))
+        return session.execute(
+            select(func.count()).select_from(model).where(*conditions)
+        ).scalar_one()
 
 
 class ReuseTestCase(unittest.TestCase):
@@ -112,6 +114,7 @@ class ReuseTestCase(unittest.TestCase):
 
     def pending(self, embedder=EMBEDDER, document_id=None):
         extraction = repository.find_extraction(document_id or self.document_id, EXTRACTOR)
+        assert extraction is not None
         return repository.unembedded_chunks(extraction.extraction_id, CHUNKER, embedder)
 
     def embed(self, chunks, embedder=EMBEDDER, embedding=EMBEDDING):
@@ -130,6 +133,7 @@ class ExtractionReuseTests(ReuseTestCase):
 
         found = repository.find_extraction(self.document_id, EXTRACTOR)
 
+        assert found is not None
         self.assertEqual(found.extraction_id, extraction_id)
         self.assertEqual(found.extractor, "tika@1")
         self.assertEqual(found.mime_type, "text/markdown")
@@ -424,6 +428,7 @@ class DocumentStatusTests(ReuseTestCase):
     def test_a_new_document_is_uploaded_and_unpublished(self):
         document = repository.get_document(self.document_id)
 
+        assert document is not None
         self.assertEqual(document.status, "uploaded")
         self.assertIsNone(document.error)
         self.assertFalse(document.published)
@@ -433,6 +438,7 @@ class DocumentStatusTests(ReuseTestCase):
         repository.set_status(self.document_id, "ingesting")
 
         document = repository.get_document(self.document_id)
+        assert document is not None
         self.assertEqual(document.status, "ingesting")
         self.assertIsNone(document.error)
 
@@ -441,6 +447,7 @@ class DocumentStatusTests(ReuseTestCase):
         repository.set_status(self.document_id, "failed", {"detail": "no gpu"})
 
         document = repository.get_document(self.document_id)
+        assert document is not None
         self.assertEqual(document.status, "failed")
         self.assertTrue(document.published)
 

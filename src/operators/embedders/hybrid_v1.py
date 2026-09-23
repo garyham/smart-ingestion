@@ -110,8 +110,9 @@ class HybridV1:
         """Embed a query with each model's query-specific path."""
         providers = available_embedding_providers(self.device)
         sparse_name = self.CONFIG["sparse_model"]
-        dense = next(_dense_model(self.CONFIG["dense_model"], providers).query_embed(text))
-        sparse = next(_sparse_model(sparse_name, providers).query_embed(text))
+        dense_model = _dense_model(self.CONFIG["dense_model"], providers)
+        dense = next(iter(dense_model.query_embed(text)))
+        sparse = next(iter(_sparse_model(sparse_name, providers).query_embed(text)))
         return Embedding(
             dense=dense.tolist(),
             sparse=normalise_sparse_vector(sparse, sparse_dimension(sparse_name)),

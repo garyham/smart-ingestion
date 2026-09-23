@@ -19,7 +19,7 @@ from db import DATABASE_URL, SCHEMA
 
 
 def connect():
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    return psycopg.connect(DATABASE_URL)
 
 
 def dense_vector_literal(values: list[float]) -> str:
@@ -78,7 +78,7 @@ def search(query: Embedding, options: SearchOptions) -> list[SearchHit]:
     dense_literal = dense_vector_literal(query.dense)
     sparse_literal = sparse_vector_literal(query.sparse)
 
-    with connect() as connection, connection.cursor() as cursor:
+    with connect() as connection, connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             f"""
             WITH candidates AS (

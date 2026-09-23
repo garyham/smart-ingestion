@@ -339,7 +339,7 @@ class DeleteTests(unittest.TestCase):
     def test_objects_are_removed_inside_the_transaction(self):
         # A failure while removing objects escapes before the rows commit, so the
         # document is still there to delete again.
-        self.client.delete_objects = lambda **_kwargs: {
+        self.client.delete_objects = lambda Bucket, Delete: {
             "Errors": [{"Key": "x", "Code": "InternalError"}]
         }
 
@@ -358,6 +358,7 @@ class LookupTests(unittest.TestCase):
 
         ref = DocumentStore(client=FakeS3Client()).lookup(CONTENT_ID)
 
+        assert ref is not None
         self.assertEqual(ref.document_id, DOCUMENT_ID)
         self.assertEqual(ref.content_id, CONTENT_ID)
         find_by_content.assert_called_once_with(CONTENT_ID)
@@ -429,7 +430,10 @@ class StatusTests(unittest.TestCase):
 
     def test_rejects_a_status_that_is_not_one(self):
         with self.assertRaises(ValueError):
-            DocumentStore(client=FakeS3Client()).set_status(DOCUMENT_ID, "done")
+            DocumentStore(client=FakeS3Client()).set_status(
+                DOCUMENT_ID,
+                "done",  # pyright: ignore[reportArgumentType]
+            )
 
     @patch("store.service.repository.mark_published", return_value=True)
     def test_publishes_a_document(self, mark_published):
@@ -519,6 +523,7 @@ class ExtractionTests(unittest.TestCase):
 
         ref = self.store.find_extraction(DOCUMENT_ID, "tika@1")
 
+        assert ref is not None
         self.assertTrue(ref.reused)
         self.assertEqual(ref.extraction_id, kept.extraction_id)
         self.assertEqual(ref.mime_type, "text/plain")
@@ -560,6 +565,7 @@ class ChunkTests(unittest.TestCase):
     def test_existing_chunks_are_reused(self, count):
         ref = self.store.find_chunks(EXTRACTION_REF, "chunker@2")
 
+        assert ref is not None
         self.assertTrue(ref.reused)
         self.assertEqual(ref.chunk_count, 4)
         self.assertEqual(ref.extraction_id, EXTRACTION_ID)
@@ -628,7 +634,7 @@ class EmbeddingTests(unittest.TestCase):
 
     def test_search_options_must_name_an_embedder(self):
         with self.assertRaises(ValueError):
-            SearchOptions(candidates=50, fusion_k=60)
+            SearchOptions(candidates=50, fusion_k=60)  # pyright: ignore[reportCallIssue]
 
 
 if __name__ == "__main__":

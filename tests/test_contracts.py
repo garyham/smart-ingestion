@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from contracts.chunks import Chunk, ChunkDraft
 from contracts.operators import OperatorRef
-from contracts.refs import EmbeddingsRef
+from contracts.refs import DocumentStatus, EmbeddingsRef
 from store.service import DocumentInfo
 
 DOCUMENT_ID = UUID("c63752f4-8d18-4da2-a107-24c52d0707cc")
@@ -66,7 +66,7 @@ class ShapeTests(unittest.TestCase):
             filename="notes.md",
             content_type="text/markdown",
             size=12,
-            status="uploaded",
+            status=DocumentStatus.UPLOADED,
             published=False,
             created_at=datetime.now(UTC),
         )

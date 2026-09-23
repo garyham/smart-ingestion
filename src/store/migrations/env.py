@@ -37,7 +37,7 @@ def include_object(object_, name, type_, _reflected, _compare_to) -> bool:
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=sqlalchemy_url(config.get_main_option("sqlalchemy.url")),
+        url=sqlalchemy_url(config.get_main_option("sqlalchemy.url") or ""),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},

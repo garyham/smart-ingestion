@@ -187,6 +187,13 @@ def load_workbook(
     }
 
 
+def _aggregate(con: duckdb.DuckDBPyConnection, sql: str) -> tuple:
+    """An aggregate query's one row: without GROUP BY it always returns exactly one."""
+    row = con.execute(sql).fetchone()
+    assert row is not None
+    return row
+
+
 def compute_column_stats(
     con: duckdb.DuckDBPyConnection,
     table_name: str,
@@ -206,10 +213,11 @@ def compute_column_stats(
     breakdowns for a particular category column). Not needed yet.
     """
     if dtype in ("BIGINT", "DOUBLE"):
-        null_count, min_v, max_v, avg_v = con.execute(
+        null_count, min_v, max_v, avg_v = _aggregate(
+            con,
             f'SELECT count(*) - count("{column}"), min("{column}"), max("{column}"), avg("{column}") '
-            f'FROM "{table_name}"'
-        ).fetchone()
+            f'FROM "{table_name}"',
+        )
         return {
             "name": column,
             "original_name": original_name,
@@ -220,9 +228,10 @@ def compute_column_stats(
             "avg": avg_v,
         }
 
-    null_count, distinct_count = con.execute(
-        f'SELECT count(*) - count("{column}"), count(DISTINCT "{column}") FROM "{table_name}"'
-    ).fetchone()
+    null_count, distinct_count = _aggregate(
+        con,
+        f'SELECT count(*) - count("{column}"), count(DISTINCT "{column}") FROM "{table_name}"',
+    )
     top_values = con.execute(
         f'SELECT "{column}", count(*) AS c FROM "{table_name}" '
         f'WHERE "{column}" IS NOT NULL GROUP BY 1 ORDER BY c DESC LIMIT 5'
@@ -240,7 +249,7 @@ def compute_column_stats(
 def compute_table_metadata(
     con: duckdb.DuckDBPyConnection, table_name: str, title: str
 ) -> dict:
-    row_count = con.execute(f'SELECT count(*) FROM "{table_name}"').fetchone()[0]
+    (row_count,) = _aggregate(con, f'SELECT count(*) FROM "{table_name}"')
     columns = con.execute(
         f'DESCRIBE "{table_name}"'
     ).fetchall()  # (name, type, null, key, default, extra)

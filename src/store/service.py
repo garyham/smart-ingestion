@@ -225,9 +225,8 @@ class DocumentStore:
                 if document_id is None:
                     continue
                 keys.setdefault(document_id, []).append(item["Key"])
-                newest[document_id] = max(
-                    item["LastModified"], newest.get(document_id, item["LastModified"])
-                )
+                modified: datetime = item["LastModified"]
+                newest[document_id] = max(modified, newest.get(document_id, modified))
 
         stale = {
             document_id

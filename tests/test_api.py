@@ -21,7 +21,7 @@ from api import (
 )
 from contracts.chunks import Chunk
 from contracts.embeddings import SearchHit
-from contracts.refs import DocumentRef, UploadRef
+from contracts.refs import DocumentRef, DocumentStatus, UploadRef
 from releases import Release
 from store.service import (
     DocumentInfo,
@@ -59,7 +59,9 @@ class PresignTests(unittest.TestCase):
 
         self.assertEqual(response["document_id"], str(CANDIDATE_ID))
         self.assertIn("?signed=yes", str(response["upload_url"]))
-        self.assertEqual(response["upload_headers"]["If-None-Match"], "*")
+        headers = response["upload_headers"]
+        assert isinstance(headers, dict)
+        self.assertEqual(headers["If-None-Match"], "*")
 
     def test_an_empty_file_is_refused(self):
         with self.assertRaises(ValueError):
@@ -273,7 +275,7 @@ class ListDocumentsTests(unittest.TestCase):
             filename="notes.txt",
             content_type="text/plain",
             size=12,
-            status="ok",
+            status=DocumentStatus.OK,
             published=True,
             created_at=datetime.now(UTC),
         )

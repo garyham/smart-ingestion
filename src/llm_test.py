@@ -146,11 +146,12 @@ def run(question: str, doc_dir: Path, model: str) -> str:
         response = litellm.completion(
             model=model, messages=messages, tools=[QUERY_TOOL_SCHEMA]
         )
+        assert isinstance(response, litellm.ModelResponse)
         message = response.choices[0].message
         messages.append(message.model_dump())
 
         if not message.tool_calls:
-            return message.content
+            return message.content or ""
 
         for tool_call in message.tool_calls:
             args = json.loads(tool_call.function.arguments)

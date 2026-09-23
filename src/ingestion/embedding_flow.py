@@ -19,7 +19,7 @@ from operators import embedders
 from releases import active_release
 
 
-def _embed_crashed(_flow, flow_run, state) -> None:
+def _embed_crashed(flow, flow_run, state) -> None:
     record_crash(UUID(str(flow_run.parameters["document_id"])), state)
 
 

@@ -129,23 +129,25 @@ def set_status(
 ) -> bool:
     """Overwrite where the document last got to. Returns False when it is gone."""
     with SessionLocal.begin() as session:
-        result = session.execute(
+        updated = session.scalar(
             update(Document)
             .where(Document.document_id == document_id)
             .values(status=status, error=error)
+            .returning(Document.document_id)
         )
-        return result.rowcount > 0
+        return updated is not None
 
 
 def mark_published(document_id: UUID) -> bool:
     """Record that the document is completely ingested. Returns False when it is gone."""
     with SessionLocal.begin() as session:
-        result = session.execute(
+        updated = session.scalar(
             update(Document)
             .where(Document.document_id == document_id)
             .values(status="ok", error=None, published=True)
+            .returning(Document.document_id)
         )
-        return result.rowcount > 0
+        return updated is not None
 
 
 def delete_document(
@@ -280,11 +282,11 @@ def _chunks_of(extraction_id: UUID, chunker: OperatorRef):
 
 def count_chunks(extraction_id: UUID, chunker: OperatorRef) -> int:
     with SessionLocal() as session:
-        return session.scalar(
+        return session.execute(
             select(func.count())
             .select_from(models.Chunk)
             .where(*_chunks_of(extraction_id, chunker))
-        )
+        ).scalar_one()
 
 
 def add_chunks(
@@ -313,11 +315,11 @@ def add_chunks(
                 ),
                 rows,
             )
-        return session.scalar(
+        return session.execute(
             select(func.count())
             .select_from(models.Chunk)
             .where(*_chunks_of(extraction_id, chunker))
-        )
+        ).scalar_one()
 
 
 def read_chunks(extraction_id: UUID, chunker: OperatorRef) -> list[Chunk]:
